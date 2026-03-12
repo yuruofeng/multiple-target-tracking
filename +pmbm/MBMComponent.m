@@ -197,7 +197,7 @@ classdef MBMComponent
             % 航迹ID和初始时间
             track.id = obj.NextTrackId;
             obj.NextTrackId = obj.NextTrackId + 1;
-            track.birthTime = obj.Config.CurrentTime;
+            track.birthTime = 1; % 简单初始化，使用固定值
         end
         
         function obj = addGlobalHypothesis(obj, trackIdx)

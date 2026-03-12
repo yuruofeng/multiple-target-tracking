@@ -77,14 +77,14 @@ classdef FilterResult
             fprintf('算法: %s v%s\n', obj.algorithmName, obj.algorithmVersion);
             fprintf('状态: %s\n', obj.status);
             
-            if ~strcmp(obj.status, 'success')
+            if strcmp(obj.status, 'success')
                 fprintf('执行时间: %.3f 秒\n', obj.executionTime);
                 
-                if ~isempty(obj.estimates.cardinality)
+                if isfield(obj.estimates, 'cardinality') && ~isempty(obj.estimates.cardinality)
                     fprintf('平均估计目标数: %.1f\n', mean(obj.estimates.cardinality));
                 end
                 
-                if isfield(obj.metrics, 'GOSPA') && ~isempty(obj.metrics.GOSPA.total)
+                if isfield(obj.metrics, 'GOSPA') && isfield(obj.metrics.GOSPA, 'total') && ~isempty(obj.metrics.GOSPA.total)
                     fprintf('平均GOSPA误差: %.2f\n', mean(obj.metrics.GOSPA.total));
                 end
             else
