@@ -4,6 +4,8 @@
 
 这是一个多目标跟踪（MTT）算法的实现库，包含多种先进的多目标跟踪算法，支持不同场景下的目标跟踪任务。
 
+**原始代码仓库**：[Agarciafernandez GitHub](https://github.com/Agarciafernandez) - 本项目基于该仓库的多目标跟踪算法实现进行了重构和扩展。
+
 ## 🚀 支持的算法
 
 ### 基础滤波器
