@@ -1,0 +1,47 @@
+# Claude Code IDE settings
+.claude/
+
+# MATLAB generated files
+*.asv
+*.m~
+*.mat
+autosave/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Temporary/debug files (prevent future accumulation)
+demos/debug_*.m
+demos/diagnose_*.m
+demos/test_*.m
+!demos/demo_*.m
+
+# Backup files
+*.bak
+*.backup
+*~
+cleanup_backup_*/
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+
+# IDE/Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Log files
+*.log
+logs/
