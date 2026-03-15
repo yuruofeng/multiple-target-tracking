@@ -18,9 +18,7 @@ classdef PMB < utils.BaseFilter
     %   pmbFilter = pmbm.PMB(config);
     %   result = pmbFilter.run(measurements, groundTruth);
     %
-    % 版本: 1.0 (集成版)
-    % 日期: 2026-03-12
-    
+
     properties (Access = private)
         PoissonComponent
         MBComponent
@@ -31,24 +29,20 @@ classdef PMB < utils.BaseFilter
         function obj = PMB(config)
             obj = obj@utils.BaseFilter(config);
             obj.PoissonComponent = pmbm.PoissonComponent(config);
-            obj.MBComponent = struct(...
-                'means', {}, ...
-                'covs', {}, ...
-                'existProbs', [], ...
-                'trackIds', [], ...
-                'birthTimes', [] ...
-            );
+            obj.MBComponent.means = {};
+            obj.MBComponent.covs = {};
+            obj.MBComponent.existProbs = [];
+            obj.MBComponent.trackIds = [];
+            obj.MBComponent.birthTimes = [];
         end
         
         function obj = initialize(obj)
             obj.PoissonComponent = obj.PoissonComponent.initialize();
-            obj.MBComponent = struct(...
-                'means', {}, ...
-                'covs', {}, ...
-                'existProbs', [], ...
-                'trackIds', [], ...
-                'birthTimes', [] ...
-            );
+            obj.MBComponent.means = {};
+            obj.MBComponent.covs = {};
+            obj.MBComponent.existProbs = [];
+            obj.MBComponent.trackIds = [];
+            obj.MBComponent.birthTimes = [];
             obj.State = struct(...
                 'poissonIntensity', obj.PoissonComponent.getIntensity(), ...
                 'numTracks', 0 ...
@@ -59,8 +53,8 @@ classdef PMB < utils.BaseFilter
             obj.PoissonComponent = obj.PoissonComponent.predict();
             for i = 1:length(obj.MBComponent.means)
                 for j = 1:length(obj.MBComponent.means{i})
-                    obj.MBComponent.means{i}(j) = obj.Config.motionModel.F * obj.MBComponent.means{i}(j);
-                    obj.MBComponent.covs{i}(j) = obj.Config.motionModel.F * obj.MBComponent.covs{i}(j) * obj.Config.motionModel.F' + obj.Config.motionModel.Q;
+                    obj.MBComponent.means{i}{j} = obj.Config.motionModel.F * obj.MBComponent.means{i}{j};
+                    obj.MBComponent.covs{i}{j} = obj.Config.motionModel.F * obj.MBComponent.covs{i}{j} * obj.Config.motionModel.F' + obj.Config.motionModel.Q;
                 end
                 obj.MBComponent.existProbs(i) = obj.MBComponent.existProbs(i) * obj.Config.survivalProb;
             end
@@ -68,8 +62,8 @@ classdef PMB < utils.BaseFilter
             obj.State.numTracks = length(obj.MBComponent.existProbs);
         end
         
-        function obj = update(obj, z)
-            if isempty(z)
+        function obj = update(obj, measurement)
+            if isempty(measurement)
                 return;
             end
             
@@ -78,7 +72,7 @@ classdef PMB < utils.BaseFilter
             pD = obj.Config.detectionProb;
             lambdaC = obj.Config.clutterRate / prod(obj.Config.surveillanceArea);
             
-            [zGated, ~, ~] = obj.gating(z);
+            [zGated, ~, ~] = obj.gating(measurement);
             
             obj.PoissonComponent = obj.PoissonComponent.update(zGated, H, R, pD, lambdaC);
             obj.PoissonComponent = obj.PoissonComponent.prune(obj.Config.pruningThreshold);
@@ -93,12 +87,38 @@ classdef PMB < utils.BaseFilter
         end
         
         function estimates = estimate(obj)
-            % 简单返回一个空的估计结果
-            estimates = struct();
-            estimates.numTargets = 0;
-            estimates.states = [];
-            estimates.existProbs = [];
-            estimates.trackIds = [];
+            % Extract actual estimates from MBComponent
+            estimates = struct('states', [], 'weights', [], 'cardinality', 0);
+
+            numTracks = length(obj.MBComponent.existProbs);
+            if numTracks == 0
+                return;
+            end
+
+            states = [];
+            weights = [];
+
+            % For each track, select the hypothesis with highest existence probability
+            for i = 1:numTracks
+                trackMeans = obj.MBComponent.means{i};
+                trackExistProbs = obj.MBComponent.existProbs;
+
+                if isempty(trackMeans)
+                    continue;
+                end
+
+                % Find the hypothesis with maximum weight for this track
+                % In PMB, after projection, there's typically one hypothesis per track
+                % but we select the first one as the estimate
+                if trackExistProbs(i) > obj.Config.existenceThreshold
+                    states = [states, trackMeans{1}];
+                    weights = [weights, trackExistProbs(i)];
+                end
+            end
+
+            estimates.states = states;
+            estimates.weights = weights;
+            estimates.cardinality = size(states, 2);
         end
         
         function obj = prune(obj)
@@ -143,20 +163,26 @@ classdef PMB < utils.BaseFilter
                         PPred = trackCovs{j};
                         
                         S = H * PPred * H' + R;
+                        S = (S + S') / 2;
                         K = PPred * H' / S;
                         zInnov = zM - H * xPred;
                         
                         hypMeans{numHyps + m} = xPred + K * zInnov;
                         hypCovs{numHyps + m} = PPred - K * S * K';
                         
-                        lik = exp(-0.5 * zInnov' * (S \ zInnov)) / sqrt(det(2 * pi * S));
-                        hypExistProbs(numHyps + m) = r_i * pD * lik / (lambdaC + r_i * pD * lik);
+                        lik = obj.computeLikelihood(zInnov, S);
+                        denom = lambdaC + r_i * pD * lik;
+                        if denom > eps
+                            hypExistProbs(numHyps + m) = r_i * pD * lik / denom;
+                        else
+                            hypExistProbs(numHyps + m) = 0;
+                        end
                     end
                 end
                 
                 newMeans{i} = hypMeans;
                 newCovs{i} = hypCovs;
-                newExistProbs(i) = sum(hypExistProbs);
+                newExistProbs(i) = min(sum(hypExistProbs), 1);
             end
             
             obj.MBComponent.means = newMeans;
@@ -224,20 +250,32 @@ classdef PMB < utils.BaseFilter
                 
                 poissonIntensity = obj.PoissonComponent.getIntensity();
                 
-                if poissonIntensity < 0.1
+                if poissonIntensity < eps
                     continue;
                 end
                 
-                S = H * obj.Config.birthModel.cov * H' + R;
-                K = obj.Config.birthModel.cov * H' / S;
-                birthMean = obj.Config.birthModel.mean + K * (zM - H * obj.Config.birthModel.mean);
-                birthCov = obj.Config.birthModel.cov - K * S * K';
+                birthSingle = obj.Config.getBirthModel('single');
+                birthMean = birthSingle.mean;
+                birthCov = birthSingle.cov;
+                
+                S = H * birthCov * H' + R;
+                zPred = H * birthMean;
+                zInnov = zM - zPred;
+                maha = zInnov' / S * zInnov;
+                
+                if maha > obj.Config.gatingThreshold
+                    continue;
+                end
+                
+                K = birthCov * H' / S;
+                updatedMean = birthMean + K * zInnov;
+                updatedCov = birthCov - K * S * K';
                 
                 newTrackId = max([0, obj.MBComponent.trackIds]) + 1;
                 
-                obj.MBComponent.means{end+1} = {birthMean};
-                obj.MBComponent.covs{end+1} = {birthCov};
-                obj.MBComponent.existProbs(end+1) = obj.Config.birthModel.existProb;
+                obj.MBComponent.means{end+1} = {updatedMean};
+                obj.MBComponent.covs{end+1} = {updatedCov};
+                obj.MBComponent.existProbs(end+1) = birthSingle.existProb;
                 obj.MBComponent.trackIds(end+1) = newTrackId;
                 obj.MBComponent.birthTimes(end+1) = obj.CurrentTime;
             end
@@ -255,6 +293,15 @@ classdef PMB < utils.BaseFilter
             H = obj.Config.measurementModel.H;
             R = obj.Config.measurementModel.R;
             gateThreshold = obj.Config.gatingThreshold;
+            
+            numTracks = length(obj.MBComponent.means);
+            
+            if numTracks == 0
+                zGated = z;
+                indices = 1:size(z, 2);
+                distances = zeros(1, size(z, 2));
+                return;
+            end
             
             keepIdx = true(1, size(z, 2));
             
@@ -287,12 +334,23 @@ classdef PMB < utils.BaseFilter
             indices = find(keepIdx);
             distances = distances(keepIdx);
         end
-    end
-    
-    methods (Static)
-        function result = run(config, measurements, groundTruth)
-            filter = pmbm.PMB(config);
-            result = filter.run(measurements, groundTruth);
+        
+        function lik = computeLikelihood(obj, innov, S)
+            nz = length(innov);
+            detS = det(2 * pi * S);
+            if detS < eps
+                lik = eps;
+                return;
+            end
+            d2 = innov' * (S \ innov);
+            if d2 > 700
+                lik = eps;
+                return;
+            end
+            lik = exp(-0.5 * d2) / sqrt(detS);
+            if lik < eps
+                lik = eps;
+            end
         end
     end
 end

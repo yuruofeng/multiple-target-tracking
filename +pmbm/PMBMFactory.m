@@ -13,9 +13,7 @@ classdef PMBMFactory
     %   pmbmFilter = factory.createFilter('PMBM', config);
     %   result = pmbmFilter.run(measurements);
     %
-    % 版本: 2.0
-    % 日期: 2026-03-12
-    
+
     properties (Constant)
         FilterTypes = struct(...
             'PMBM', 'PMBM', ...

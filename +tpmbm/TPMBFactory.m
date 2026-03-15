@@ -13,9 +13,7 @@ classdef TPMBFactory
     %   filter = factory.createFilter('TPMBM', config);
     %   result = filter.run(measurements);
     %
-    % 版本: 1.0
-    % 日期: 2026-03-12
-    
+
     properties (Constant)
         FilterTypes = struct(...
             'TPMBM', 'TPMBM', ...

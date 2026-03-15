@@ -8,9 +8,7 @@ classdef MetricFactory
     %   gospa = factory.createMetric('GOSPA', 'p', 2, 'c', 10);
     %   [distance, assignment, decomposition] = gospa.compute(x, y);
     %
-    % 版本: 1.0
-    % 日期: 2026-03-12
-    
+
     properties (Constant)
         % 支持的度量类型
         MetricTypes = struct(...

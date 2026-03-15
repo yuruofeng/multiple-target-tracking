@@ -14,9 +14,7 @@ classdef TrajectoryErrorCalculator < handle
     %       X_estimate, t_b_estimate, length_estimate, ...
     %       X_truth, t_birth, t_death, k_end);
     %
-    % 版本: 2.0 (重构版)
-    % 日期: 2026-03-12
-    
+
     properties
         p       (1,1) double = 2
         c       (1,1) double = 10

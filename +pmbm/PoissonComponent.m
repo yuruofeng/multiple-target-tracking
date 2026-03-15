@@ -8,9 +8,7 @@ classdef PoissonComponent
     %   poisson = poisson.predict();
     %   poisson = poisson.update(z, H, R);
     %
-    % 版本: 1.0
-    % 日期: 2026-03-12
-    
+
     properties
         Weights    double  = []  % 高斯分量权重
         Means      double  = []  % 高斯分量均值
@@ -30,7 +28,9 @@ classdef PoissonComponent
             %   config - FilterConfig对象
             
             if nargin < 1
-                error('MTT:MissingParameter', '必须提供config参数');
+                ME = utils.MTTException(utils.ErrorCode.MISSING_PARAMETER, ...
+                    '必须提供config参数');
+                throw(ME);
             end
             
             obj.Config = config;
@@ -86,23 +86,23 @@ classdef PoissonComponent
             obj = obj.addBirth();
         end
         
-        function obj = update(obj, z, H, R, pD, lambdaC)
+        function obj = update(obj, measurement, H, R, pD, lambdaC)
             % UPDATE 更新泊松分量
             %
             % 输入:
-            %   z      - 量测集合
+            %   measurement - 量测集合
             %   H      - 量测矩阵
             %   R      - 量测噪声协方差
             %   pD     - 检测概率
             %   lambdaC - 杂波强度
-            
-            if isempty(obj.Weights) || isempty(z)
+
+            if isempty(obj.Weights) || isempty(measurement)
                 return;
             end
-            
+
             activeIdx = find(obj.Active);
             numActive = length(activeIdx);
-            numMeas = size(z, 2);
+            numMeas = size(measurement, 2);
             
             newWeights = [];
             newMeans = [];
@@ -120,13 +120,13 @@ classdef PoissonComponent
             end
             
             for j = 1:numMeas
-                z_j = z(:, j);
-                
+                meas_j = measurement(:, j);
+
                 for i = 1:numActive
                     idx = activeIdx(i);
-                    
+
                     [K, S, innov] = obj.computeKalmanGain(...
-                        obj.Means(:, idx), obj.Covariances(:, :, idx), H, R, z_j);
+                        obj.Means(:, idx), obj.Covariances(:, :, idx), H, R, meas_j);
                     
                     likelihood = obj.computeLikelihood(innov, S);
                     weight_update = pD * obj.Weights(idx) * likelihood / lambdaC;
@@ -176,18 +176,24 @@ classdef PoissonComponent
         
         function obj = addBirth(obj)
             % ADDBIRTH 添加新生分量
-            
+
             birthModel = obj.Config.birthModel;
-            
+
             if isempty(birthModel.means)
                 return;
             end
-            
+
             numBirth = size(birthModel.means, 2);
-            
+
             obj.Weights = [obj.Weights, birthModel.weights * birthModel.intensity];
-            obj.Means = [obj.Means, birthModel.means];
-            
+
+            % Handle empty Means case
+            if isempty(obj.Means)
+                obj.Means = birthModel.means;
+            else
+                obj.Means = [obj.Means, birthModel.means];
+            end
+
             if ndims(birthModel.covs) == 3
                 obj.Covariances = cat(3, obj.Covariances, birthModel.covs);
             else
@@ -195,7 +201,7 @@ classdef PoissonComponent
                     obj.Covariances = cat(3, obj.Covariances, birthModel.covs);
                 end
             end
-            
+
             obj.Active = [obj.Active, true(1, numBirth)];
         end
         
@@ -221,8 +227,20 @@ classdef PoissonComponent
         
         function likelihood = computeLikelihood(obj, innov, S)
             nz = length(innov);
+            detS = det(S);
+            if detS < eps
+                likelihood = eps;
+                return;
+            end
             d2 = innov' * (S \ innov);
-            likelihood = exp(-0.5 * d2) / sqrt((2 * pi)^nz * det(S));
+            if d2 > 700
+                likelihood = eps;
+                return;
+            end
+            likelihood = exp(-0.5 * d2) / sqrt((2 * pi)^nz * detS);
+            if likelihood < eps
+                likelihood = eps;
+            end
         end
     end
 end

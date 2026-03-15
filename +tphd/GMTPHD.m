@@ -18,9 +18,7 @@ classdef GMTPHD < utils.BaseFilter
     %   filter = tphd.GMTPHD(config);
     %   result = filter.run(measurements, groundTruth);
     %
-    % 版本: 2.0 (重构版)
-    % 日期: 2026-03-12
-    
+
     properties (Access = private)
         % 滤波器状态
         Weights       % PHD权重
@@ -94,7 +92,7 @@ classdef GMTPHD < utils.BaseFilter
             % 提取参数
             F = obj.Config.motionModel.F;
             Q = obj.Config.motionModel.Q;
-            p_s = obj.Config.survivalProbability;
+            p_s = obj.Config.survivalProb;
             Nx = size(F, 1);
             
             % 对每个组件进行预测
@@ -167,9 +165,9 @@ classdef GMTPHD < utils.BaseFilter
             % 提取参数
             H = obj.Config.measurementModel.H;
             R = obj.Config.measurementModel.R;
-            p_d = obj.Config.detectionProbability;
-            lambda_c = obj.Config.clutterIntensity;
-            area = obj.Config.area;
+            p_d = obj.Config.detectionProb;
+            lambda_c = obj.Config.clutterRate / prod(obj.Config.surveillanceArea);
+            area = obj.Config.surveillanceArea;
             Nx = size(obj.Config.motionModel.F, 1);
             Nz = size(H, 1);
             

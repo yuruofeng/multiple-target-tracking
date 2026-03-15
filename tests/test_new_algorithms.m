@@ -2,10 +2,7 @@ function test_new_algorithms()
     % TEST_NEW_ALGORITHMS 测试新集成的算法
     %
     % 测试PMB、TPMB、TMBM滤波器的基本功能
-    %
-    % 版本: 1.0
-    % 日期: 2026-03-12
-    
+
     % 添加项目根目录到搜索路径
     projectRoot = fullfile(pwd, '..');
     addpath(projectRoot);

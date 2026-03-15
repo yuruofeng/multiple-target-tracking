@@ -14,9 +14,7 @@ classdef PMBM < utils.BaseFilter
     %   pmbmFilter = pmbm.PMBM(config);
     %   result = pmbmFilter.run(measurements, groundTruth);
     %
-    % 版本: 2.0 (重构版)
-    % 日期: 2026-03-12
-    
+
     properties (Access = private)
         PoissonComponent  % 泊松分量
         MBMComponent      % 多伯努利混合分量
@@ -65,40 +63,31 @@ classdef PMBM < utils.BaseFilter
             obj.State.numHypotheses = length(obj.MBMComponent.GlobalHypWeight);
         end
         
-        function obj = update(obj, z)
+        function obj = update(obj, measurement)
             % UPDATE 更新步骤
-            
-            if isempty(z)
+
+            if isempty(measurement)
                 return;
             end
-            
-            % 获取参数
+
             H = obj.Config.measurementModel.H;
             R = obj.Config.measurementModel.R;
             pD = obj.Config.detectionProb;
             lambdaC = obj.Config.clutterRate / prod(obj.Config.surveillanceArea);
-            
-            % 门控
-            [z_in_gate, ~, ~] = obj.gating(z);
-            
-            % 更新泊松分量
+
+            [z_in_gate, ~, ~] = obj.gating(measurement);
+
             obj.PoissonComponent = obj.PoissonComponent.update(z_in_gate, H, R, pD, lambdaC);
-            
-            % 剪枝泊松分量
             obj.PoissonComponent = obj.PoissonComponent.prune(obj.Config.pruningThreshold);
-            
-            % 更新MBM分量
-            obj.MBMComponent = obj.MBMComponent.update(z_in_gate, H, R, pD, obj.Config.existenceThreshold);
-            
-            % 剪枝MBM分量
+
+            obj.MBMComponent = obj.MBMComponent.update(z_in_gate, H, R, pD, lambdaC, obj.Config.existenceThreshold);
+
             obj.MBMComponent = obj.MBMComponent.prune(...
                 obj.Config.pruningThreshold, ...
                 obj.Config.maxComponents);
-            
-            % 从泊松分量创建新的航迹（检测到新生目标）
+
             obj = obj.createTracksFromPoisson(z_in_gate, H, R, pD, lambdaC);
-            
-            % 更新状态
+
             obj.State.poissonIntensity = obj.PoissonComponent.getIntensity();
             obj.State.numTracks = length(obj.MBMComponent.Tracks);
             obj.State.numHypotheses = length(obj.MBMComponent.GlobalHypWeight);
@@ -128,57 +117,58 @@ classdef PMBM < utils.BaseFilter
     end
     
     methods (Access = protected)
-        function [z_in_gate, measIdx, trackIdx] = gating(obj, z)
+        function [zGated, measIdx, trackIdx] = gating(obj, measurement)
             % GATING 门控
-            
-            z_in_gate = z;
-            measIdx = 1:size(z, 2);
+
+            zGated = measurement;
+            measIdx = 1:size(measurement, 2);
             trackIdx = [];
-            
+
             if isempty(obj.MBMComponent.Tracks)
                 return;
             end
-            
+
             % 对每个航迹进行门控
             threshold = obj.Config.gatingThreshold;
             H = obj.Config.measurementModel.H;
             R = obj.Config.measurementModel.R;
-            
-            inGate = false(1, size(z, 2));
-            
+
+            inGate = false(1, size(measurement, 2));
+
             for i = 1:length(obj.MBMComponent.Tracks)
                 track = obj.MBMComponent.Tracks{i};
-                
+
                 % 预测量测
                 z_pred = H * track.state;
-                
+
                 % 新息协方差
                 S = H * track.covariance * H' + R;
-                
+
                 % 计算马氏距离
-                for j = 1:size(z, 2)
-                    innov = z(:, j) - z_pred;
+                for j = 1:size(measurement, 2)
+                    innov = measurement(:, j) - z_pred;
                     d2 = innov' * (S \ innov);
-                    
+
                     if d2 < threshold
                         inGate(j) = true;
                     end
                 end
             end
-            
-            z_in_gate = z(:, inGate);
+
+            zGated = measurement(:, inGate);
             measIdx = find(inGate);
         end
         
-        function obj = createTracksFromPoisson(obj, z, H, R, pD, lambdaC)
+        function obj = createTracksFromPoisson(obj, measurement, H, R, pD, lambdaC)
             % CREATETRACKSFROMPOISSON 从泊松分量创建新航迹
-            
-            % 简化实现：为每个量测创建一个潜在的新航迹
-            % 实际实现中应该使用更复杂的数据关联
-            
-            for j = 1:size(z, 2)
+
+            if isempty(measurement)
+                return;
+            end
+
+            for j = 1:size(measurement, 2)
                 obj.MBMComponent = obj.MBMComponent.createTrackFromMeasurement(...
-                    z(:, j), H, R, pD, lambdaC);
+                    measurement(:, j), H, R, pD, lambdaC);
             end
         end
     end

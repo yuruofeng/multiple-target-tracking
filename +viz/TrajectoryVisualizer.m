@@ -7,10 +7,8 @@ classdef TrajectoryVisualizer < handle
     %   viz = viz.TrajectoryVisualizer();
     %   viz.plotTrajectories(X_truth, t_birth, t_death, X_estimate, z, k);
     %
-    % 版本: 1.0 (重构版)
-    % 日期: 2026-03-12
     % 来源: Trajectory errors/DrawTrajectoryFilterEstimates.m
-    
+
     properties
         FigureHandle            % 图形句柄
         XLimit = [-100 1000]    % X轴范围

@@ -13,9 +13,7 @@ classdef TPMB < utils.BaseFilter
     %   tpmbFilter = tpmb.TPMB(config);
     %   result = tpmbFilter.run(measurements, groundTruth);
     %
-    % 版本: 1.0 (集成版)
-    % 日期: 2026-03-12
-    
+
     properties (Access = private)
         PoissonComponent
         TrajectoryComponents
@@ -30,24 +28,20 @@ classdef TPMB < utils.BaseFilter
         function obj = TPMB(config)
             obj = obj@utils.BaseFilter(config);
             obj.PoissonComponent = pmbm.PoissonComponent(config);
-            obj.TrajectoryComponents = struct(...
-                'trajectories', {}, ...
-                'existProbs', [], ...
-                'trackIds', [], ...
-                'birthTimes', [], ...
-                'deathTimes', [] ...
-            );
+            obj.TrajectoryComponents.trajectories = {};
+            obj.TrajectoryComponents.existProbs = [];
+            obj.TrajectoryComponents.trackIds = [];
+            obj.TrajectoryComponents.birthTimes = [];
+            obj.TrajectoryComponents.deathTimes = [];
         end
         
         function obj = initialize(obj)
             obj.PoissonComponent = obj.PoissonComponent.initialize();
-            obj.TrajectoryComponents = struct(...
-                'trajectories', {}, ...
-                'existProbs', [], ...
-                'trackIds', [], ...
-                'birthTimes', [], ...
-                'deathTimes', [] ...
-            );
+            obj.TrajectoryComponents.trajectories = {};
+            obj.TrajectoryComponents.existProbs = [];
+            obj.TrajectoryComponents.trackIds = [];
+            obj.TrajectoryComponents.birthTimes = [];
+            obj.TrajectoryComponents.deathTimes = [];
             obj.State = struct(...
                 'poissonIntensity', obj.PoissonComponent.getIntensity(), ...
                 'numTrajectories', 0 ...
@@ -66,7 +60,12 @@ classdef TPMB < utils.BaseFilter
                     numSteps = size(hyp.states, 2);
                     
                     xPred = obj.Config.motionModel.F * hyp.states(:, numSteps);
-                    PPred = obj.Config.motionModel.F * hyp.covariances{numSteps} * obj.Config.motionModel.F' + obj.Config.motionModel.Q;
+                    
+                    if length(hyp.covariances) < numSteps || isempty(hyp.covariances{numSteps})
+                        PPred = obj.Config.motionModel.Q;
+                    else
+                        PPred = obj.Config.motionModel.F * hyp.covariances{numSteps} * obj.Config.motionModel.F' + obj.Config.motionModel.Q;
+                    end
                     
                     traj.hypotheses{h}.states = [hyp.states, xPred];
                     traj.hypotheses{h}.covariances{numSteps + 1} = PPred;
@@ -105,12 +104,49 @@ classdef TPMB < utils.BaseFilter
         end
         
         function estimates = estimate(obj)
-            % 简单返回一个空的估计结果
-            estimates = struct();
-            estimates.numTrajectories = 0;
-            estimates.trajectories = {};
-            estimates.existProbs = [];
-            estimates.trackIds = [];
+            % Extract actual estimates from TrajectoryComponents
+            estimates = struct('states', [], 'weights', [], 'cardinality', 0);
+
+            numTrajs = length(obj.TrajectoryComponents.existProbs);
+            if numTrajs == 0
+                return;
+            end
+
+            states = [];
+            weights = [];
+
+            % For each trajectory, extract current state estimate
+            for i = 1:numTrajs
+                traj = obj.TrajectoryComponents.trajectories{i};
+                trajExistProb = obj.TrajectoryComponents.existProbs(i);
+
+                if isempty(traj.hypotheses) || trajExistProb < obj.Config.existenceThreshold
+                    continue;
+                end
+
+                % Find hypothesis with maximum existence probability
+                maxExistProb = 0;
+                bestHypIdx = 1;
+                for h = 1:length(traj.hypotheses)
+                    if ~isempty(traj.hypotheses{h}) && traj.hypotheses{h}.existProb > maxExistProb
+                        maxExistProb = traj.hypotheses{h}.existProb;
+                        bestHypIdx = h;
+                    end
+                end
+
+                % Extract the current state (last time step)
+                bestHyp = traj.hypotheses{bestHypIdx};
+                if ~isempty(bestHyp.states)
+                    numSteps = size(bestHyp.states, 2);
+                    currentState = bestHyp.states(:, numSteps);
+                    states = [states, currentState];
+                    weights = [weights, trajExistProb];
+                end
+            end
+
+            estimates.states = states;
+            estimates.weights = weights;
+            estimates.cardinality = size(states, 2);
         end
         
         function obj = prune(obj)
@@ -150,23 +186,35 @@ classdef TPMB < utils.BaseFilter
                         numSteps = size(hyp.states, 2);
                         
                         xPred = hyp.states(:, numSteps);
-                        PPred = hyp.covariances{numSteps};
+                        
+                        if length(hyp.covariances) >= numSteps && ~isempty(hyp.covariances{numSteps})
+                            PPred = hyp.covariances{numSteps};
+                        else
+                            PPred = obj.Config.motionModel.Q;
+                        end
                         
                         S = H * PPred * H' + R;
+                        S = (S + S') / 2;
                         K = PPred * H' / S;
-                        zInnov = zM - H * xPred;
+                        zInnov = zM - H * xPred(:);
                         
                         xUpdated = xPred + K * zInnov;
                         PUpdated = PPred - K * S * K';
                         
-                        lik = exp(-0.5 * zInnov' * (S \ zInnov)) / sqrt(det(2 * pi * S));
+                        lik = obj.computeLikelihood(zInnov, S);
                         
                         newHyp = struct();
                         newHyp.states = [hyp.states, xUpdated];
                         newHyp.covariances = hyp.covariances;
                         newHyp.covariances{numSteps + 1} = PUpdated;
                         newHyp.detectionHistory = [hyp.detectionHistory, m];
-                        newHyp.existProb = r_i * pD * lik / (lambdaC + r_i * pD * lik);
+                        
+                        denom = lambdaC + r_i * pD * lik;
+                        if denom > eps
+                            newHyp.existProb = r_i * pD * lik / denom;
+                        else
+                            newHyp.existProb = 0;
+                        end
                         
                         newHypotheses{numHyps + m} = newHyp;
                     end
@@ -221,17 +269,25 @@ classdef TPMB < utils.BaseFilter
                     
                     for k = 1:maxSteps
                         stateSum = zeros(stateDim, 1);
+                        covSum = zeros(stateDim, stateDim);
                         weightSum = 0;
                         
                         for h = 1:numHyps
                             if ~isempty(traj.hypotheses{h}) && size(traj.hypotheses{h}.states, 2) >= k
-                                stateSum = stateSum + weights(h) * traj.hypotheses{h}.states(:, k);
+                                h_state = traj.hypotheses{h}.states(:, k);
+                                h_state = h_state(:);  % 确保是列向量
+                                stateSum = stateSum + weights(h) * h_state;
+                                if length(traj.hypotheses{h}.covariances) >= k && ~isempty(traj.hypotheses{h}.covariances{k})
+                                    h_cov = traj.hypotheses{h}.covariances{k};
+                                    covSum = covSum + weights(h) * h_cov;
+                                end
                                 weightSum = weightSum + weights(h);
                             end
                         end
                         
                         if weightSum > 0
                             mergedStates(:, k) = stateSum / weightSum;
+                            mergedCovs{k} = covSum / weightSum;
                             mergedDetHistory(k) = 1;
                         end
                     end
@@ -261,35 +317,53 @@ classdef TPMB < utils.BaseFilter
         end
         
         function obj = createTrajectoriesFromPoisson(obj, z, H, R, pD, lambdaC)
+            % CREATETRAJECTORIESFROMPOISSON 从泊松分量创建新轨迹
+            %
+            % 修复：添加门控检查，只有通过门控的量测才创建新轨迹
+
             numMeasurements = size(z, 2);
-            
+
             for m = 1:numMeasurements
                 zM = z(:, m);
-                
+
                 poissonIntensity = obj.PoissonComponent.getIntensity();
-                
-                if poissonIntensity < 0.1
+
+                if poissonIntensity < eps
                     continue;
                 end
-                
-                S = H * obj.Config.birthModel.cov * H' + R;
-                K = obj.Config.birthModel.cov * H' / S;
-                birthMean = obj.Config.birthModel.mean + K * (zM - H * obj.Config.birthModel.mean);
-                birthCov = obj.Config.birthModel.cov - K * S * K';
-                
+
+                % 获取birthModel用于门控检查
+                birthModel = obj.Config.getBirthModel('single');
+
+                % 计算与birthModel的马氏距离（门控检查）
+                S_birth = H * birthModel.cov * H' + R;
+                zPred_birth = H * birthModel.mean;
+                innov_birth = zM - zPred_birth;
+                maha_birth = innov_birth' * (S_birth \ innov_birth);
+
+                % 门控检查：只有通过门控的量测才创建新轨迹
+                if maha_birth > obj.Config.gatingThreshold
+                    continue;  % 跳过未通过门控的量测（很可能是杂波）
+                end
+
+                % 通过门控，创建新轨迹
+                K = birthModel.cov * H' / S_birth;
+                birthMean = birthModel.mean + K * innov_birth;
+                birthCov = birthModel.cov - K * S_birth * K';
+
                 newTrackId = max([0, obj.TrajectoryComponents.trackIds]) + 1;
-                
+
                 newHyp = struct();
                 newHyp.states = birthMean;
                 newHyp.covariances = {birthCov};
                 newHyp.detectionHistory = m;
-                newHyp.existProb = obj.Config.birthModel.existProb;
-                
+                newHyp.existProb = birthModel.existProb;
+
                 newTraj = struct();
                 newTraj.hypotheses = {newHyp};
-                
+
                 obj.TrajectoryComponents.trajectories{end+1} = newTraj;
-                obj.TrajectoryComponents.existProbs(end+1) = obj.Config.birthModel.existProb;
+                obj.TrajectoryComponents.existProbs(end+1) = birthModel.existProb;
                 obj.TrajectoryComponents.trackIds(end+1) = newTrackId;
                 obj.TrajectoryComponents.birthTimes(end+1) = obj.CurrentTime;
                 obj.TrajectoryComponents.deathTimes(end+1) = obj.CurrentTime;
@@ -308,6 +382,15 @@ classdef TPMB < utils.BaseFilter
             H = obj.Config.measurementModel.H;
             R = obj.Config.measurementModel.R;
             gateThreshold = obj.Config.gatingThreshold;
+            
+            numTrajs = length(obj.TrajectoryComponents.trajectories);
+            
+            if numTrajs == 0
+                zGated = z;
+                indices = 1:size(z, 2);
+                distances = zeros(1, size(z, 2));
+                return;
+            end
             
             keepIdx = true(1, size(z, 2));
             
@@ -350,12 +433,22 @@ classdef TPMB < utils.BaseFilter
             indices = find(keepIdx);
             distances = distances(keepIdx);
         end
-    end
-    
-    methods (Static)
-        function result = run(config, measurements, groundTruth)
-            filter = tpmb.TPMB(config);
-            result = filter.run(measurements, groundTruth);
+        
+        function lik = computeLikelihood(obj, innov, S)
+            detS = det(2 * pi * S);
+            if detS < eps
+                lik = eps;
+                return;
+            end
+            d2 = innov' * (S \ innov);
+            if d2 > 700
+                lik = eps;
+                return;
+            end
+            lik = exp(-0.5 * d2) / sqrt(detS);
+            if lik < eps
+                lik = eps;
+            end
         end
     end
 end

@@ -8,9 +8,7 @@ classdef MTTException < MException
     %       '参数 %s 的值无效', paramName);
     %   throw(ME);
     %
-    % 版本: 1.0
-    % 日期: 2026-03-12
-    
+
     properties
         ErrorCode    double      % 错误码
         ErrorLevel   char = 'error'  % 错误级别: 'error', 'warning', 'info'
@@ -37,8 +35,8 @@ classdef MTTException < MException
             errorMsg = utils.ErrorCode.getMessage(errorCode);
             fullMsg = sprintf('[%d] %s: %s', errorCode, errorMsg, formattedMsg);
             
-            % 创建标识符
-            identifier = sprintf('MTT:%d', errorCode);
+            % 创建标识符 (使用有效的 MATLAB 消息标识符格式)
+            identifier = sprintf('MTT:Error%d', errorCode);
             
             % 调用父类构造函数
             obj = obj@MException(identifier, fullMsg);

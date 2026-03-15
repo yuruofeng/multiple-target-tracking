@@ -13,9 +13,7 @@ classdef GOSPA < handle
     %   gospa = metric.GOSPA('p', 2, 'c', 10, 'alpha', 2);
     %   [distance, assignment, decomposition] = gospa.compute(x, y);
     %
-    % 版本: 2.0 (重构版)
-    % 日期: 2026-03-12
-    
+
     properties
         p       (1,1) double = 2      % 指数 (1<=p<inf)
         c       (1,1) double = 10     % 截断距离 (c>0)
@@ -79,7 +77,7 @@ classdef GOSPA < handle
             end
         end
         
-        function [distance, assignment, decomposition] = compute(obj, x, y)
+        function [distance, assignmentResult, decomposition] = compute(obj, x, y)
             % COMPUTE 计算GOSPA距离
             %
             % 输入:
@@ -88,8 +86,37 @@ classdef GOSPA < handle
             %
             % 输出:
             %   distance - GOSPA距离
-            %   assignment - 分配结果
+            %   assignmentResult - 分配结果
             %   decomposition - 距离分解
+            
+            % ===== 输入规范化 =====
+            % 处理两个空集的情况
+            if isempty(x) && isempty(y)
+                distance = 0;
+                assignmentResult = [];
+                decomposition = struct('localisation', 0, 'missed', 0, 'false', 0);
+                obj.Results = struct('distance', distance, 'assignment', assignmentResult, ...
+                    'decomposition', decomposition, 'numEstimated', 0, 'numTrue', 0, ...
+                    'parameters', struct('p', obj.p, 'c', obj.c, 'alpha', obj.alpha));
+                return;
+            end
+            
+            % 确定状态维度(从非空的一方获取)
+            state_dim = 0;
+            if ~isempty(x)
+                state_dim = size(x, 1);
+            elseif ~isempty(y)
+                state_dim = size(y, 1);
+            end
+            
+            % 规范化空矩阵为正确维度
+            if isempty(x)
+                x = zeros(state_dim, 0);
+            end
+            if isempty(y)
+                y = zeros(state_dim, 0);
+            end
+            % ===== 规范化结束 =====
             
             % 验证输入
             if size(x, 1) ~= size(y, 1)
@@ -103,7 +130,7 @@ classdef GOSPA < handle
             
             % 初始化结果
             distance = 0;
-            assignment = [];
+            assignmentResult = [];
             decomposition = struct('localisation', 0, 'missed', 0, 'false', 0);
             
             % 计算成本矩阵
@@ -131,16 +158,16 @@ classdef GOSPA < handle
                 else
                     % 双方都非空，使用拍卖算法
                     costMatrix = -(costMatrix.^obj.p);
-                    [assignment, yToXAssignment, ~] = assignment.Auction.run(costMatrix);
-                    
+                    [xToYAssignment, yToXAssignment, ~] = assignment.Auction.run(costMatrix);
+
                     % 计算成本
                     for ind = 1:nx
-                        if assignment(ind) ~= 0
-                            optCost = optCost + costMatrix(ind, assignment(ind));
-                            
+                        if xToYAssignment(ind) ~= 0
+                            optCost = optCost + costMatrix(ind, xToYAssignment(ind));
+
                             if obj.alpha == 2
-                                if costMatrix(ind, assignment(ind)) > -obj.c^obj.p
-                                    decomposition.localisation = decomposition.localisation + costMatrix(ind, assignment(ind));
+                                if costMatrix(ind, xToYAssignment(ind)) > -obj.c^obj.p
+                                    decomposition.localisation = decomposition.localisation + costMatrix(ind, xToYAssignment(ind));
                                 else
                                     decomposition.missed = decomposition.missed - dummyCost;
                                     decomposition.false = decomposition.false - dummyCost;
@@ -153,12 +180,15 @@ classdef GOSPA < handle
                             end
                         end
                     end
-                    
+
                     % 处理未分配的y目标
                     optCost = optCost - sum(yToXAssignment == 0) * dummyCost;
                     if obj.alpha == 2
                         decomposition.false = decomposition.false - sum(yToXAssignment == 0) * dummyCost;
                     end
+
+                    % 将分配结果赋值给输出变量
+                    assignmentResult = xToYAssignment;
                 end
             end
             
@@ -173,7 +203,7 @@ classdef GOSPA < handle
             end
             
             % 保存结果
-            obj.Results = struct('distance', distance, 'assignment', assignment, 'decomposition', decomposition, 'numEstimated', nx, 'numTrue', ny, 'parameters', struct('p', obj.p, 'c', obj.c, 'alpha', obj.alpha));
+            obj.Results = struct('distance', distance, 'assignment', assignmentResult, 'decomposition', decomposition, 'numEstimated', nx, 'numTrue', ny, 'parameters', struct('p', obj.p, 'c', obj.c, 'alpha', obj.alpha));
         end
         
         function displayResults(obj)

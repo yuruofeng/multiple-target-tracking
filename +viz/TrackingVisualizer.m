@@ -9,9 +9,7 @@ classdef TrackingVisualizer < handle
     %   visualizer.plotMetricComparison(metrics);
     %   visualizer.plotTrackingResults(estimates, groundTruth);
     %
-    % 版本: 1.0
-    % 日期: 2026-03-12
-    
+
     properties
         FigureHandle = []  % 图形句柄
         LineStyles = {'-', '--', ':', '-.'}  % 线条样式

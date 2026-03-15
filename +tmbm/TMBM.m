@@ -14,9 +14,7 @@ classdef TMBM < utils.BaseFilter
     %   tmbmFilter = tmbm.TMBM(config);
     %   result = tmbmFilter.run(measurements, groundTruth);
     %
-    % 版本: 1.0 (集成版)
-    % 日期: 2026-03-12
-    
+
     properties (Access = private)
         MBMComponent
         GlobalHypotheses
@@ -199,14 +197,16 @@ classdef TMBM < utils.BaseFilter
             numMeasurements = size(z, 2);
             
             if isempty(obj.GlobalHypotheses)
+                birthModel = obj.Config.getBirthModel('single');
+
                 for m = 1:numMeasurements
                     newTrack = struct();
                     newTrack.singleTargetHypotheses = cell(1, 1);
-                    
+
                     sth = struct();
-                    sth.states = obj.Config.birthModel.mean;
-                    sth.covariances = {obj.Config.birthModel.cov};
-                    sth.existenceProb = obj.Config.birthModel.existProb;
+                    sth.states = birthModel.mean;
+                    sth.covariances = {birthModel.cov};
+                    sth.existenceProb = birthModel.existProb;
                     sth.detectionHistory = m;
                     
                     newTrack.singleTargetHypotheses{1} = sth;

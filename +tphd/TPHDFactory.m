@@ -7,9 +7,7 @@ classdef TPHDFactory
     %   factory = tphd.TPHDFactory();
     %   filter = factory.createFilter('GMTPHD', config);
     %
-    % 版本: 1.0
-    % 日期: 2026-03-12
-    
+
     properties (Constant)
         % 支持的滤波器类型
         FilterTypes = struct(...

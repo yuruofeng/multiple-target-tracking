@@ -9,65 +9,71 @@ classdef FilterResult
     %   result.metrics.GOSPA.total = gospaError;
     %   result.save('results.mat');
     %
-    % 版本: 1.0
-    % 日期: 2026-03-12
-    
+
     properties
         % 核心结果
-        estimates struct = struct(...
-            'states', [], ...
-            'weights', [], ...
-            'cardinality', [], ...
-            'trajectories', {} ...
-        )
-        
+        estimates struct
+
         % 性能指标
-        metrics struct = struct(...
-            'GOSPA', struct(...
-                'total', [], ...
-                'localization', [], ...
-                'missed', [], ...
-                'false', [] ...
-            ), ...
-            'trajectory', struct(...
-                'total', [], ...
-                'localization', [], ...
-                'missed', [], ...
-                'false', [], ...
-                'switch', [] ...
-            ), ...
-            'cardinalityError', [], ...
-            'computationalTime', [] ...
-        )
-        
+        metrics struct
+
         % 滤波器状态
-        filterState struct = struct()
-        
+        filterState struct
+
         % 元信息
         executionTime (1,1) double = 0
         timeStamp (1,1) datetime = datetime('now')
         algorithmVersion (1,:) char = '1.0'
         algorithmName (1,:) char = ''
-        
+
         % 状态标识
         status (1,:) char = 'pending'
         message (1,:) char = ''
         errorCode (1,1) double = utils.ErrorCode.SUCCESS
-        
+
         % 诊断信息
-        diagnostics struct = struct(...
-            'numComponents', [], ...
-            'numPredictions', [], ...
-            'numUpdates', [], ...
-            'numPrunes', [] ...
-        )
+        diagnostics struct
     end
-    
+
     methods
         function obj = FilterResult()
             % FILTERRESULT 构造函数
-            
+
             obj.timeStamp = datetime('now');
+
+            % Initialize estimates struct
+            est = struct();
+            est.estimatesList = [];
+            est.weights = [];
+            est.cardinality = [];
+            est.trajectories = {};
+            obj.estimates = est;
+
+            % Initialize metrics struct
+            met = struct();
+            met.GOSPA.total = [];
+            met.GOSPA.localization = [];
+            met.GOSPA.missed = [];
+            met.GOSPA.false = [];
+            met.trajectory.total = [];
+            met.trajectory.localization = [];
+            met.trajectory.missed = [];
+            met.trajectory.false = [];
+            met.trajectory.switch = [];
+            met.cardinalityError = [];
+            met.computationalTime = [];
+            obj.metrics = met;
+
+            % Initialize filterState struct
+            obj.filterState = struct();
+
+            % Initialize diagnostics struct
+            diag = struct();
+            diag.numComponents = [];
+            diag.numPredictions = [];
+            diag.numUpdates = [];
+            diag.numPrunes = [];
+            obj.diagnostics = diag;
         end
         
         function display(obj)
@@ -104,12 +110,16 @@ classdef FilterResult
         
         function s = toStruct(obj)
             % TOSTRUCT 转换为结构体
-            
+
             props = properties(obj);
             s = struct();
             for i = 1:length(props)
-                if ~isprop(obj, props{i}, 'Dependent')
-                    s.(props{i}) = obj.(props{i});
+                prop_name = props{i};
+                % Check if it's a dependent property using meta.class
+                mc = metaclass(obj);
+                prop_meta = mc.PropertyList(strcmp({mc.PropertyList.Name}, prop_name));
+                if ~isempty(prop_meta) && ~prop_meta.Dependent
+                    s.(prop_name) = obj.(prop_name);
                 end
             end
         end

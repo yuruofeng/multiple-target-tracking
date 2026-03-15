@@ -1,10 +1,7 @@
 function test_integration()
 % TEST_INTEGRATION 集成测试函数
-% 
+%
 % 测试所有重构后的模块是否正常工作
-% 
-% 版本: 1.0
-% 日期: 2026-03-12
 
 fprintf('\n===== 开始集成测试 =====\n\n');
 

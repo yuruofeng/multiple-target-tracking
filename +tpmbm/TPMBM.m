@@ -17,9 +17,7 @@ classdef TPMBM < utils.BaseFilter
     %   filter = tpmbm.TPMBM(config);
     %   result = filter.run(measurements, groundTruth);
     %
-    % 版本: 2.0 (重构版)
-    % 日期: 2026-03-12
-    
+
     properties (Access = private)
         % 滤波器状态
         TrajectoryPPP     % 轨迹PPP分量
@@ -150,7 +148,7 @@ classdef TPMBM < utils.BaseFilter
             
             F = obj.Config.motionModel.F;
             Q = obj.Config.motionModel.Q;
-            p_s = obj.Config.survivalProbability;
+            p_s = obj.Config.survivalProb;
             
             for i = 1:length(obj.TrajectoryPPP)
                 % 更新存活概率
@@ -172,7 +170,11 @@ classdef TPMBM < utils.BaseFilter
             
             F = obj.Config.motionModel.F;
             Q = obj.Config.motionModel.Q;
-            p_s = obj.Config.survivalProbability;
+            p_s = obj.Config.survivalProb;
+            
+            if obj.CurrentTime <= 1
+                return;
+            end
             
             for i = 1:length(obj.TrajectoryBernoulli)
                 bernoulli = obj.TrajectoryBernoulli{i};
@@ -189,9 +191,11 @@ classdef TPMBM < utils.BaseFilter
                             % 更新结束时间
                             hyp.endTime(k) = hyp.endTime(k) + 1;
                             
-                            % 更新结束时间概率
-                            hyp.endTimeProbability(k, obj.CurrentTime) = hyp.endTimeProbability(k, obj.CurrentTime - 1) * p_s;
-                            hyp.endTimeProbability(k, obj.CurrentTime - 1) = hyp.endTimeProbability(k, obj.CurrentTime - 1) * (1 - p_s);
+                            % 更新结束时间概率（索引保护）
+                            if obj.CurrentTime > 1 && size(hyp.endTimeProbability, 2) >= obj.CurrentTime - 1
+                                hyp.endTimeProbability(k, obj.CurrentTime) = hyp.endTimeProbability(k, obj.CurrentTime - 1) * p_s;
+                                hyp.endTimeProbability(k, obj.CurrentTime - 1) = hyp.endTimeProbability(k, obj.CurrentTime - 1) * (1 - p_s);
+                            end
                         end
                         bernoulli(j) = hyp;
                     end
@@ -205,7 +209,7 @@ classdef TPMBM < utils.BaseFilter
             
             H = obj.Config.measurementModel.H;
             R = obj.Config.measurementModel.R;
-            p_d = obj.Config.detectionProbability;
+            p_d = obj.Config.detectionProb;
             
             numMeasurements = size(measurement, 2);
             updatedBernoulli = cell(1, length(obj.TrajectoryBernoulli));
@@ -266,7 +270,7 @@ classdef TPMBM < utils.BaseFilter
             
             H = obj.Config.measurementModel.H;
             R = obj.Config.measurementModel.R;
-            p_d = obj.Config.detectionProbability;
+            p_d = obj.Config.detectionProb;
             
             numMeasurements = size(measurement, 2);
             obj.NewlyDetectedTrajectory{obj.CurrentTime} = cell(1, numMeasurements);
@@ -392,7 +396,7 @@ classdef TPMBM < utils.BaseFilter
         function hyp = processMisDetectionHypothesis(obj, hyp, measurement)
             % PROCESSMISDETECTION 处理漏检假设
             
-            p_d = obj.Config.detectionProbability;
+            p_d = obj.Config.detectionProb;
             hyp.existenceProbability = hyp.existenceProbability * (1 - p_d);
             hyp.isAlive = true;
             
@@ -409,7 +413,7 @@ classdef TPMBM < utils.BaseFilter
             
             H = obj.Config.measurementModel.H;
             R = obj.Config.measurementModel.R;
-            p_d = obj.Config.detectionProbability;
+            p_d = obj.Config.detectionProb;
             
             % 计算预测测量
             zPred = H * hyp.trajectoryMixture.marginalMean;

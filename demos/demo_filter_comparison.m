@@ -1,701 +1,558 @@
 % demos/demo_filter_comparison.m
-% 滤波器通用对比演示应用
-% 支持多种滤波器的性能对比和可视化
+% 一键式多目标跟踪滤波器性能对比基准
+%
+% 描述:
+%   本脚本旨在提供一个标准化的测试平台，用于对比多种多目标跟踪滤波器的性能。
+%   所有滤波器在统一的仿真场景下运行，以确保对比的公平性。
+%
+% 支持的滤波器类型:
+%   PMBM家族: PMBM, PMB
+%   TPMBM家族: TPMBM, TPMB
+%   PHD家族: GMPHD, GMCPHD
+%   TPHD家族: GMTPHD
+%   CDFilter家族: CDPMBM, CDGMPHD, CDGMCPHD
+%
+% 功能:
+%   1. 固定随机种子，保证结果的可复现性。
+%   2. 在统一的仿真参数（如目标模型、杂波率、检测概率）下生成测试数据。
+%   3. 通过激活选项选择要对比的滤波器。
+%   4. 计算并记录每种算法的运行时间、GOSPA 误差和势估计误差。
+%   5. 使用 metric.GOSPA 计算 GOSPA 指标。
+%   6. 生成可视化图表。
+%   7. 将所有量化性能指标输出为 MATLAB 表格。
+%
+% 前提条件:
+%   - MATLAB R2020a 或更高版本。
+%   - 相关的滤波器和工具函数已添加到 MATLAB 路径中。
+%
+%---
 
-%% 清理环境
+%% 清理与环境设置
 clear; clc; close all;
 
-%% 添加路径
+% 添加必要的工具包路径
 addpath(genpath('..'));
 
-%% 主函数
-function main()
-    display_welcome();
-    app = init_app();
+% 定义一个可重跑的接口
+if ~exist('rerun_simulation', 'var')
+    rerun_simulation = @() demo_filter_comparison;
+end
+
+
+%% --- 滤波器激活选项 ---
+% 设置为true以启用对应滤波器的测试
+
+% PMBM家族
+enable.PMBM = true;
+enable.PMB = true;
+
+% TPMBM家族
+enable.TPMBM = true;
+enable.TPMB = true;
+
+% PHD家族
+enable.GMPHD = true;
+enable.GMCPHD = true;
+
+% TPHD家族 (轨迹PHD)
+enable.GMTPHD = true;
+
+% 连续-离散滤波器家族
+enable.CDPMBM = false;      % 需要连续-离散模型配置
+enable.CDGMPHD = false;     % 需要连续-离散模型配置
+enable.CDGMCPHD = false;    % 需要连续-离散模型配置
+
+
+%% --- 仿真核心参数 ---
+% 使用固定的随机种子以保证结果的可复现性
+rng(2024);
+
+% 仿真总时长 (时间步)
+simulation_duration = 100;
+
+% 滤波器配置列表 (根据激活选项动态构建)
+filter_configs = build_filter_configs(enable);
+
+% 初始化结果存储结构
+num_filters = length(filter_configs);
+results = cell(num_filters, 1);
+filter_names = cell(num_filters, 1);
+
+
+%% --- 生成仿真数据 ---
+fprintf('正在生成仿真数据...\n');
+
+% 统一的仿真参数
+sim_params = struct();
+sim_params.simulation_duration = simulation_duration;
+sim_params.num_targets = 5;
+sim_params.clutter_rate = 15;
+sim_params.detection_prob = 0.95;
+sim_params.survival_prob = 0.99;
+sim_params.surveillance_area = [-1000, 1000; -1000, 1000];
+
+% 运动和测量模型
+motion_model = struct('F', [1 0 1 0; 0 1 0 1; 0 0 1 0; 0 0 0 1], 'Q', eye(4) * 0.5);
+measurement_model = struct('H', [1 0 0 0; 0 1 0 0], 'R', eye(2) * 5);
+
+% 生成测试数据
+[measurements, ground_truth] = generate_test_data(sim_params, motion_model, measurement_model);
+
+fprintf('仿真数据生成完毕。\n\n');
+
+
+%% --- 运行滤波器对比测试 ---
+fprintf('开始运行滤波器对比测试...\n');
+
+for i = 1:num_filters
+    config = filter_configs{i};
+    filter_names{i} = config.name;
     
-    while true
-        choice = display_main_menu();
-        
-        switch choice
-            case 1
-                configure_comparison(app);
-            case 2
-                run_comparison(app);
-            case 3
-                visualize_results(app);
-            case 4
-                export_results(app);
-            case 5
-                fprintf('感谢使用滤波器对比演示应用！\n');
-                break;
+    fprintf('--- 正在测试: %s ---\n', config.name);
+    
+    % 创建滤波器配置参数
+    filter_config = utils.FilterConfig();
+    filter_config.detectionProb = sim_params.detection_prob;
+    filter_config.survivalProb = sim_params.survival_prob;
+    filter_config.clutterRate = sim_params.clutter_rate;
+    filter_config.surveillanceArea = sim_params.surveillance_area(1,:);
+    filter_config.motionModel = motion_model;
+    filter_config.measurementModel = measurement_model;
+
+    % 添加必需的birth模型（已优化参数）
+    % 注意：不同滤波器对birthModel的字段名有不同要求
+    % PMBM/TPMBM使用PoissonComponent，需要means/covs/weights (复数)
+    % PMB/TPMB直接访问，需要mean/cov/existProb (单数)
+    %
+    % 参数优化说明：
+    % - intensity: 0.005 → 0.05 (提高10倍，增加新生目标检测能力)
+    % - existProb: 0.01 → 0.1 (提高10倍，增加初始航迹置信度)
+    % - cov: 使用更大的初始不确定性，允许目标在更大范围内出现
+    filter_config.birthModel = struct(...
+        'type', 'Poisson', ...
+        'intensity', 0.05, ...         % 优化：提高birth强度，更容易初始化航迹
+        'means', [0; 0; 0; 0], ...     % PMBM/TPMBM用
+        'covs', eye(4) * 200, ...      % 优化：增大初始协方差，覆盖更大区域
+        'weights', 1, ...              % PMBM/TPMBM用
+        'mean', [0; 0; 0; 0], ...      % PMB/TPMB用
+        'cov', eye(4) * 200, ...       % 优化：增大初始协方差
+        'existProb', 0.1 ...           % 优化：提高初始存在概率，避免过早剪枝
+    );
+
+    % 设置更宽松的滤波器参数，避免过早剪枝航迹
+    filter_config.pruningThreshold = 1e-6;      % 优化：降低剪枝阈值，保留弱航迹
+    filter_config.existenceThreshold = 1e-5;    % 优化：降低存在阈值
+    filter_config.maxComponents = 200;          % 优化：增加最大分量数
+    filter_config.gatingThreshold = 30;         % 优化：增大门控阈值，接受更多量测
+    filter_config.verbose = false;              % 关闭详细输出
+
+    % 为TPMBM滤波器添加特定的参数
+    if strcmp(config.type, 'TPMBM')
+        filter_config.extraParams.gateSize = 9.210;
+        filter_config.extraParams.maxGlobalHypotheses = 1000;
+        filter_config.extraParams.minGlobalHypothesisWeight = 1e-4;
+        filter_config.extraParams.numMinimumAssignment = 100;
+        filter_config.extraParams.minEndTimeProbability = 1e-4;
+        filter_config.extraParams.minBirthTimeProbability = 1e-1;
+        filter_config.extraParams.minExistenceProbability = 1e-4;
+        filter_config.extraParams.totalTimeSteps = simulation_duration;
+    end
+
+    % 为GMTPHD滤波器添加特定的参数
+    if strcmp(config.type, 'GMTPHD')
+        filter_config.extraParams.Lscan = 5;
+        filter_config.extraParams.maxComponents = 30;
+        filter_config.extraParams.absorptionThreshold = 4;
+    end
+
+    % 创建滤波器
+    try
+        % 根据配置中指定的工厂创建滤波器
+        switch config.factory
+            case 'pmbm.PMBMFactory'
+                filter = pmbm.PMBMFactory.createFilter(config.type, filter_config);
+            case 'tpmbm.TPMBMFactory'
+                filter = tpmbm.TPMBMFactory.createFilter(config.type, filter_config);
+            case 'tpmbm.TPMBFactory'
+                filter = tpmbm.TPMBFactory.createFilter(config.type, filter_config);
+            case 'phd.PHDFactory'
+                filter = phd.PHDFactory.createFilter(config.type, filter_config);
+            case 'tphd.TPHDFactory'
+                filter = tphd.TPHDFactory.createFilter(config.type, filter_config);
+            case 'cdfilters.CDFilterFactory'
+                filter = cdfilters.CDFilterFactory.create(config.type, filter_config);
             otherwise
-                fprintf('无效选择，请重新输入。\n');
+                error('未知的工厂: %s', config.factory);
         end
+
+    catch ME
+        fprintf('错误: 无法创建滤波器 "%s"。\n', config.name);
+        fprintf('错误信息: %s\n', ME.message);
+        fprintf('错误标识符: %s\n', ME.identifier);
+        if isa(ME, 'utils.MTTException')
+            fprintf('错误码: %d\n', ME.ErrorCode);
+        end
+        fprintf('工厂: %s, 类型: %s\n', config.factory, config.type);
+        results{i} = create_empty_result(config.name, simulation_duration);
+        continue;
     end
-end
 
-%% 显示欢迎信息
-function display_welcome()
-fprintf('=====================================\n');
-fprintf('   滤波器通用对比演示应用\n');
-fprintf('=====================================\n');
-fprintf('本应用支持多种多目标跟踪滤波器的对比分析\n');
-fprintf('可以测试不同滤波器的性能、资源占用等指标\n');
-fprintf('并提供多样化的可视化结果展示\n');
-fprintf('=====================================\n\n');
-end
-
-%% 初始化应用
-function app = init_app()
-    app = struct();
-    app.available_filters = get_available_filters();
-    
-    app.params = struct();
-    app.params.selected_filters = {};
-    app.params.num_runs = 10;
-    app.params.simulation_duration = 100;
-    app.params.num_targets = 5;
-    app.params.clutter_rate = 10;
-    app.params.detection_prob = 0.9;
-    app.params.survival_prob = 0.99;
-    
-    app.results = struct();
-    app.results.execution_times = {};
-    app.results.memory_usage = {};
-    app.results.tracking_accuracy = {};
-    
-    app.visualization = struct();
-    app.visualization.show_execution_time = true;
-    app.visualization.show_memory_usage = true;
-    app.visualization.show_tracking_accuracy = true;
-    app.visualization.show_trajectories = true;
-    
-    fprintf('应用初始化完成！\n');
-    fprintf('可用滤波器数量: %d\n\n', length(app.available_filters));
-end
-
-%% 获取可用的滤波器类型
-function filters = get_available_filters()
-    filters = struct();
-    
+    % 运行滤波器
+    start_time = tic;
     try
-        filters.phd = struct();
-        filters.phd.name = 'PHD滤波器';
-        filters.phd.types = phd.PHDFactory.getAvailableTypes();
-        filters.phd.factory = @phd.PHDFactory.createFilter;
-    catch
-        fprintf('警告: PHD滤波器工厂不可用\n');
-    end
-    
-    try
-        filters.pmbm = struct();
-        filters.pmbm.name = 'PMBM滤波器';
-        filters.pmbm.types = pmbm.PMBMFactory.getAvailableTypes();
-        filters.pmbm.factory = @pmbm.PMBMFactory.createFilter;
-    catch
-        fprintf('警告: PMBM滤波器工厂不可用\n');
-    end
-    
-    try
-        filters.tpmbm = struct();
-        filters.tpmbm.name = 'TPMBM滤波器';
-        filters.tpmbm.types = tpmbm.TPMBMFactory.getAvailableTypes();
-        filters.tpmbm.factory = @tpmbm.TPMBMFactory.createFilter;
-    catch
-        fprintf('警告: TPMBM滤波器工厂不可用\n');
-    end
-    
-    try
-        filters.cd = struct();
-        filters.cd.name = '连续-离散滤波器';
-        filters.cd.types = cdfilters.CDFilterFactory.getAvailableTypes();
-        filters.cd.factory = @cdfilters.CDFilterFactory.createFilter;
-    catch
-        fprintf('警告: 连续-离散滤波器工厂不可用\n');
-    end
-end
-
-%% 显示主菜单
-function choice = display_main_menu()
-fprintf('\n主菜单:\n');
-fprintf('1. 配置对比参数\n');
-fprintf('2. 运行对比测试\n');
-fprintf('3. 可视化结果\n');
-fprintf('4. 导出结果\n');
-fprintf('5. 退出应用\n');
-
-choice = input('请输入选择 (1-5): ');
-end
-
-%% 配置对比参数
-function configure_comparison(app)
-fprintf('\n=== 配置对比参数 ===\n');
-
-fprintf('\n可用滤波器类型:\n');
-filter_idx = 1;
-filter_options = {};
-
-filter_names = fieldnames(app.available_filters);
-for k = 1:length(filter_names)
-    filter_group_name = filter_names{k};
-    filter_group = app.available_filters.(filter_group_name);
-    fprintf('\n%s:\n', filter_group.name);
-    for i = 1:length(filter_group.types)
-        fprintf('%d. %s\n', filter_idx, filter_group.types{i});
-        filter_options{filter_idx} = struct('group', filter_group_name, 'type', filter_group.types{i});
-        filter_idx = filter_idx + 1;
-    end
-end
-
-fprintf('\n请输入要对比的滤波器编号（多个编号用空格分隔）: ');
-selected_indices = input('');
-
-app.params.selected_filters = {};
-for i = 1:length(selected_indices)
-    idx = selected_indices(i);
-    if idx >= 1 && idx <= length(filter_options)
-        app.params.selected_filters{end+1} = filter_options{idx};
-    end
-end
-
-fprintf('\n配置模拟参数:\n');
-app.params.num_runs = input('每个滤波器运行次数: ', 's');
-app.params.num_runs = str2double(app.params.num_runs);
-if isnan(app.params.num_runs) || app.params.num_runs < 1
-    app.params.num_runs = 10;
-end
-
-app.params.simulation_duration = input('模拟时长: ', 's');
-app.params.simulation_duration = str2double(app.params.simulation_duration);
-if isnan(app.params.simulation_duration) || app.params.simulation_duration < 1
-    app.params.simulation_duration = 100;
-end
-
-app.params.num_targets = input('目标数量: ', 's');
-app.params.num_targets = str2double(app.params.num_targets);
-if isnan(app.params.num_targets) || app.params.num_targets < 1
-    app.params.num_targets = 5;
-end
-
-app.params.clutter_rate = input('杂波率: ', 's');
-app.params.clutter_rate = str2double(app.params.clutter_rate);
-if isnan(app.params.clutter_rate) || app.params.clutter_rate < 0
-    app.params.clutter_rate = 10;
-end
-
-app.params.detection_prob = input('检测概率: ', 's');
-app.params.detection_prob = str2double(app.params.detection_prob);
-if isnan(app.params.detection_prob) || app.params.detection_prob < 0 || app.params.detection_prob > 1
-    app.params.detection_prob = 0.9;
-end
-
-app.params.survival_prob = input('存活概率: ', 's');
-app.params.survival_prob = str2double(app.params.survival_prob);
-if isnan(app.params.survival_prob) || app.params.survival_prob < 0 || app.params.survival_prob > 1
-    app.params.survival_prob = 0.99;
-end
-
-fprintf('\n配置可视化选项:\n');
-app.visualization.show_execution_time = input('显示执行时间对比 (1=是, 0=否): ');
-app.visualization.show_memory_usage = input('显示内存使用对比 (1=是, 0=否): ');
-app.visualization.show_tracking_accuracy = input('显示跟踪精度对比 (1=是, 0=否): ');
-app.visualization.show_trajectories = input('显示轨迹对比 (1=是, 0=否): ');
-
-fprintf('\n配置完成！\n');
-end
-
-%% 运行对比测试
-function run_comparison(app)
-if isempty(app.params.selected_filters)
-    fprintf('请先选择要对比的滤波器！\n');
-    return;
-end
-
-fprintf('\n=== 运行对比测试 ===\n');
-
-app.results.execution_times = {};
-app.results.memory_usage = {};
-app.results.tracking_accuracy = {};
-
-for i = 1:length(app.params.selected_filters)
-    filter_info = app.params.selected_filters{i};
-    filter_group = app.available_filters.(filter_info.group);
-    filter_type = filter_info.type;
-    
-    fprintf('\n测试 %s - %s\n', filter_group.name, filter_type);
-    
-    exec_times = zeros(1, app.params.num_runs);
-    memory_usages = zeros(1, app.params.num_runs);
-    accuracies = zeros(1, app.params.num_runs);
-    
-    for run = 1:app.params.num_runs
-        fprintf('  运行 %d/%d...', run, app.params.num_runs);
-        
-        config = create_filter_config(app.params);
-        
-        try
-            filter = filter_group.factory(filter_type, config);
-        catch ME
-            fprintf('  错误: %s\n', ME.message);
-            exec_times(run) = NaN;
-            memory_usages(run) = NaN;
-            accuracies(run) = NaN;
-            continue;
+        result = filter.run(measurements);
+        run_time = toc(start_time);
+    catch ME
+        fprintf('错误: 滤波器 "%s" 运行时发生错误。\n', config.name);
+        fprintf('错误信息: %s\n', ME.message);
+        fprintf('错误标识符: %s\n', ME.identifier);
+        fprintf('错误堆栈:\n');
+        for stack_i = 1:length(ME.stack)
+            fprintf('  [%d] %s (文件: %s, 行: %d)\n', ...
+                stack_i, ME.stack(stack_i).name, ME.stack(stack_i).file, ME.stack(stack_i).line);
         end
-        
-        [measurements, ground_truth] = generate_test_data(app.params);
-        
-        start_time = tic;
-        
-        try
-            result = filter.run(measurements, ground_truth);
-            exec_times(run) = toc(start_time);
-        catch ME
-            fprintf('  运行错误: %s\n', ME.message);
-            exec_times(run) = NaN;
-            accuracies(run) = NaN;
-            memory_usages(run) = 0;
-            continue;
-        end
-        
-        try
-            memInfo = memory;
-            memory_usages(run) = memInfo.MemUsedMATLAB / 1024 / 1024;
-        catch
-            memory_usages(run) = 0;
-        end
-        
-        try
-            accuracies(run) = calculate_tracking_accuracy(result, ground_truth);
-        catch
-            accuracies(run) = 0;
-        end
-        
-        fprintf('  完成 (%.3f秒)\n', exec_times(run));
+        results{i} = create_empty_result(config.name, simulation_duration);
+        continue;
     end
     
-    app.results.execution_times{i} = struct('filter', [filter_group.name, ' - ', filter_type], 'times', exec_times);
-    app.results.memory_usage{i} = struct('filter', [filter_group.name, ' - ', filter_type], 'usage', memory_usages);
-    app.results.tracking_accuracy{i} = struct('filter', [filter_group.name, ' - ', filter_type], 'accuracy', accuracies);
-end
-
-fprintf('\n对比测试完成！\n');
-end
-
-%% 创建滤波器配置
-function config = create_filter_config(params)
-config = utils.FilterConfig();
-
-config.detectionProb = params.detection_prob;
-config.survivalProb = params.survival_prob;
-config.clutterRate = params.clutter_rate;
-config.surveillanceArea = [1000, 1000];
-config.pruningThreshold = 1e-5;
-config.maxComponents = 100;
-config.existenceThreshold = 1e-5;
-
-config.motionModel.F = [1 0 1 0; 0 1 0 1; 0 0 1 0; 0 0 0 1];
-config.motionModel.Q = eye(4) * 0.1;
-
-config.measurementModel.H = [1 0 0 0; 0 1 0 0];
-config.measurementModel.R = eye(2) * 1;
-
-config.birthModel.means = zeros(4, 1);
-config.birthModel.covs = eye(4);
-config.birthModel.weights = 1;
-config.birthModel.intensity = 0.005;
-end
-
-%% 生成测试数据
-function [measurements, ground_truth] = generate_test_data(params)
-num_targets = params.num_targets;
-duration = params.simulation_duration;
-
-target_states = cell(duration, 1);
-target_births = cell(duration, 1);
-target_deaths = cell(duration, 1);
-
-for t = 1:duration
-    target_states{t} = [];
-    target_births{t} = [];
-    target_deaths{t} = [];
+    % --- 性能评估 ---
+    fprintf('正在评估性能...\n');
     
-    if t == 1 || (t > 1 && rand() < 0.1)
-        num_new_targets = randi(2);
-        for i = 1:num_new_targets
-            if size(target_states{t}, 2) < num_targets
-                x0 = rand() * 800 + 100;
-                y0 = rand() * 800 + 100;
-                vx0 = (rand() - 0.5) * 10;
-                vy0 = (rand() - 0.5) * 10;
+    gospa_metrics = zeros(simulation_duration, 4);
+    cardinality_error = zeros(simulation_duration, 1);
+    estimated_cardinality = zeros(simulation_duration, 1);
+    
+    % 检查result对象结构
+    if ~isa(result, 'utils.FilterResult')
+        fprintf('错误: 滤波器返回的不是FilterResult对象\n');
+        results{i} = create_empty_result(config.name, simulation_duration);
+        continue;
+    end
+
+    % 检查滤波器是否执行成功
+    if strcmp(result.status, 'error')
+        fprintf('错误: 滤波器 "%s" 执行失败。\n', config.name);
+        fprintf('错误码: %d\n', result.errorCode);
+        fprintf('错误消息: %s\n', result.message);
+        if isfield(result, 'diagnostics') && isfield(result.diagnostics, 'errorStack')
+            fprintf('错误堆栈:\n');
+            for stack_i = 1:length(result.diagnostics.errorStack)
+                fprintf('  [%d] %s (文件: %s, 行: %d)\n', ...
+                    stack_i, result.diagnostics.errorStack(stack_i).name, ...
+                    result.diagnostics.errorStack(stack_i).file, ...
+                    result.diagnostics.errorStack(stack_i).line);
+            end
+        end
+        results{i} = create_empty_result(config.name, simulation_duration);
+        continue;
+    end
+    
+    for t = 1:simulation_duration
+        gt_states = ground_truth.states{t};
+        
+        est_states = [];
+        try
+            estimates_data = result.estimates;
+            
+            if isfield(estimates_data, 'estimatesList')
+                estimates_list = estimates_data.estimatesList;
                 
-                new_state = [x0; y0; vx0; vy0];
-                target_states{t} = [target_states{t}, new_state];
-                target_births{t} = [target_births{t}, size(target_states{t}, 2)];
+                if iscell(estimates_list) && t <= numel(estimates_list) && ~isempty(estimates_list{t})
+                    est_item = estimates_list{t};
+                    
+                    if isstruct(est_item) && isfield(est_item, 'states')
+                        extracted_states = est_item.states;
+                        
+                        if isnumeric(extracted_states) && size(extracted_states, 2) > 0
+                            est_states = extracted_states;
+                        end
+                    end
+                end
             end
+        catch ME
+            est_states = [];
         end
-    else
+        
+        try
+            [gospa_metrics(t,1), ~, gospa_decomposed] = metric.GOSPA.run(est_states, gt_states, 'p', 2, 'c', 100, 'alpha', 2);
+            gospa_metrics(t,2) = gospa_decomposed.localisation;
+            gospa_metrics(t,3) = gospa_decomposed.missed;
+            gospa_metrics(t,4) = gospa_decomposed.false;
+        catch ME
+            gospa_metrics(t,:) = NaN;
+        end
+        
+        true_card = size(gt_states, 2);
+        est_card = size(est_states, 2);
+        estimated_cardinality(t) = est_card;
+        cardinality_error(t) = abs(true_card - est_card);
+    end
+    
+    % 存储结果
+    results{i} = struct( ...
+        'name', config.name, ...
+        'run_time', run_time, ...
+        'gospa_metrics', gospa_metrics, ...
+        'cardinality_error', cardinality_error, ...
+        'estimated_cardinality', estimated_cardinality ...
+    );
+    
+    fprintf('测试完成 (总耗时: %.2f 秒)。\n\n', run_time);
+end
+
+fprintf('所有滤波器测试完毕。\n');
+
+
+%% --- 结果可视化 ---
+fprintf('正在生成可视化图表...\n');
+
+% 图一：GOSPA 曲线对比
+figure('Name', 'GOSPA 误差对比', 'NumberTitle', 'off', 'Position', [100, 600, 800, 400]);
+hold on;
+colors = lines(num_filters);
+for i = 1:num_filters
+    if ~isempty(results{i})
+        plot(1:simulation_duration, results{i}.gospa_metrics(:,1), 'LineWidth', 1.5, 'Color', colors(i,:), 'DisplayName', results{i}.name);
+    end
+end
+hold off;
+title('GOSPA 误差随时间变化曲线');
+xlabel('时间步');
+ylabel('GOSPA 误差');
+legend('show', 'Location', 'northwest');
+grid on;
+set(gca, 'FontSize', 12);
+
+% 图二：多维度性能对比
+figure('Name', '多维度性能对比', 'NumberTitle', 'off', 'Position', [950, 200, 600, 800]);
+
+% 子图 1: 势估计对比
+subplot(3, 1, 1);
+hold on;
+true_cardinality = zeros(simulation_duration, 1);
+for t = 1:simulation_duration
+    true_cardinality(t) = size(ground_truth.states{t}, 2);
+end
+plot(1:simulation_duration, true_cardinality, 'k--', 'LineWidth', 2, 'DisplayName', '真实目标数');
+for i = 1:num_filters
+    if ~isempty(results{i})
+        plot(1:simulation_duration, results{i}.estimated_cardinality, 'LineWidth', 1.5, 'Color', colors(i,:), 'DisplayName', results{i}.name);
+    end
+end
+hold off;
+title('目标数估计对比');
+xlabel('时间步');
+ylabel('目标数');
+legend('show', 'Location', 'best');
+grid on;
+
+% 子图 2: GOSPA分量对比
+subplot(3, 1, 2);
+avg_loc = zeros(num_filters, 1);
+avg_missed = zeros(num_filters, 1);
+avg_false = zeros(num_filters, 1);
+for i = 1:num_filters
+    if ~isempty(results{i})
+        avg_loc(i) = mean(results{i}.gospa_metrics(:,2), 'omitnan');
+        avg_missed(i) = mean(results{i}.gospa_metrics(:,3), 'omitnan');
+        avg_false(i) = mean(results{i}.gospa_metrics(:,4), 'omitnan');
+    end
+end
+bar_data = [avg_loc, avg_missed, avg_false];
+b = bar(bar_data);
+title('平均 GOSPA 分量对比');
+xlabel('滤波器');
+ylabel('误差');
+set(gca, 'XTickLabel', filter_names);
+legend({'定位误差', '漏检误差', '误报误差'}, 'Location', 'best');
+grid on;
+
+% 子图 3: 运行时间对比
+subplot(3, 1, 3);
+run_times = zeros(num_filters, 1);
+for i = 1:num_filters
+    if ~isempty(results{i})
+        run_times(i) = results{i}.run_time;
+    end
+end
+b = bar(run_times);
+title('总运行时间对比');
+xlabel('滤波器');
+ylabel('时间 (秒)');
+set(gca, 'XTickLabel', filter_names);
+grid on;
+
+fprintf('可视化图表生成完毕。\n\n');
+
+% --- 性能指标量化总结 ---
+fprintf('--- 性能指标量化总结 ---\n');
+
+% 使用omitnan避免NaN传播
+avg_gospa = cellfun(@(r) mean(r.gospa_metrics(:,1), 'omitnan'), results);
+avg_card_error = cellfun(@(r) mean(r.cardinality_error), results);
+total_run_time = cellfun(@(r) r.run_time, results);
+
+% 创建表格
+summary_table = table(filter_names, total_run_time, avg_gospa, avg_card_error, ...
+    'VariableNames', {'滤波器', '总运行时间_秒', '平均GOSPA', '平均势误差'});
+
+% 显示表格
+disp(summary_table);
+
+
+%% --- 辅助函数 ---
+
+function [measurements, ground_truth] = generate_test_data(params, motion_model, measurement_model)
+    % 从参数结构体中提取参数
+    duration = params.simulation_duration;
+    surveillance_area = params.surveillance_area;
+    
+    % 初始化状态和量测容器
+    target_states = cell(duration, 1);
+    measurements.timeStamps = 1:duration;
+    measurements.measurements = cell(1, duration);
+
+    % 初始目标状态
+    initial_states = [
+        0, 0, 10, 0;
+        400, -300, -5, 8;
+        -500, 500, 6, -6;
+        -200, 600, -8, -4;
+        700, -100, -10, 5
+    ]';
+    
+    birth_times = [1, 10, 20, 30, 40];
+    death_times = [80, 70, 90, 85, 95];
+
+    % 仿真循环
+    for t = 1:duration
+        % --- 目标状态演化 ---
+        live_targets = [];
         if t > 1
-            target_states{t} = target_states{t-1};
-        end
-    end
-    
-    if ~isempty(target_states{t})
-        F = [1 0 1 0; 0 1 0 1; 0 0 1 0; 0 0 0 1];
-        Q = eye(4) * 0.1;
-        
-        for i = 1:size(target_states{t}, 2)
-            target_states{t}(:, i) = F * target_states{t}(:, i) + mvnrnd(zeros(4, 1), Q)';
-            
-            if rand() > params.survival_prob
-                target_deaths{t} = [target_deaths{t}, i];
-            end
-        end
-        
-        if ~isempty(target_deaths{t})
-            target_states{t}(:, target_deaths{t}) = [];
-        end
-    end
-end
-
-measurements = struct();
-measurements.timeStamps = 1:duration;
-measurements.measurements = cell(1, duration);
-
-for t = 1:duration
-    z = [];
-    
-    if ~isempty(target_states{t})
-        H = [1 0 0 0; 0 1 0 0];
-        R = eye(2) * 1;
-        
-        for i = 1:size(target_states{t}, 2)
-            if rand() < params.detection_prob
-                measurement = H * target_states{t}(:, i) + mvnrnd(zeros(2, 1), R)';
-                z = [z, measurement];
-            end
-        end
-    end
-    
-    num_clutter = poissrnd(params.clutter_rate);
-    for i = 1:num_clutter
-        clutter = [rand() * 1000; rand() * 1000];
-        z = [z, clutter];
-    end
-    
-    measurements.measurements{t} = z;
-end
-
-ground_truth = struct();
-ground_truth.states = target_states;
-ground_truth.births = target_births;
-ground_truth.deaths = target_deaths;
-end
-
-%% 计算跟踪精度
-function accuracy = calculate_tracking_accuracy(result, ground_truth)
-if ~isfield(result, 'estimates') || isempty(result.estimates)
-    accuracy = 0;
-    return;
-end
-
-if ~isfield(result.estimates, 'states') || isempty(result.estimates.states)
-    accuracy = 0;
-    return;
-end
-
-num_estimates = 0;
-for t = 1:length(result.estimates.states)
-    if iscell(result.estimates.states)
-        if ~isempty(result.estimates.states{t})
-            num_estimates = num_estimates + size(result.estimates.states{t}, 2);
-        end
-    else
-        num_estimates = num_estimates + size(result.estimates.states, 2);
-    end
-end
-
-num_ground_truth = 0;
-for t = 1:length(ground_truth.states)
-    num_ground_truth = num_ground_truth + size(ground_truth.states{t}, 2);
-end
-
-if num_ground_truth > 0
-    accuracy = max(0, 1 - abs(num_estimates - num_ground_truth) / num_ground_truth);
-else
-    accuracy = 0;
-end
-end
-
-%% 可视化结果
-function visualize_results(app)
-if isempty(app.results.execution_times)
-    fprintf('请先运行对比测试！\n');
-    return;
-end
-
-fprintf('\n=== 可视化结果 ===\n');
-
-figure('Name', '滤波器对比结果', 'Position', [100, 100, 1200, 800]);
-
-subplot_idx = 1;
-num_subplots = 0;
-
-if app.visualization.show_execution_time
-    num_subplots = num_subplots + 1;
-end
-if app.visualization.show_memory_usage
-    num_subplots = num_subplots + 1;
-end
-if app.visualization.show_tracking_accuracy
-    num_subplots = num_subplots + 1;
-end
-if app.visualization.show_trajectories
-    num_subplots = num_subplots + 1;
-end
-
-if num_subplots <= 2
-    [rows, cols] = deal(1, num_subplots);
-elseif num_subplots <= 4
-    [rows, cols] = deal(2, 2);
-else
-    [rows, cols] = deal(3, ceil(num_subplots/3));
-end
-
-if app.visualization.show_execution_time && ~isempty(app.results.execution_times)
-    subplot(rows, cols, subplot_idx);
-    subplot_idx = subplot_idx + 1;
-    
-    filter_names = {};
-    avg_times = [];
-    std_times = [];
-    
-    for i = 1:length(app.results.execution_times)
-        result = app.results.execution_times{i};
-        filter_names{end+1} = result.filter;
-        valid_times = result.times(~isnan(result.times));
-        if ~isempty(valid_times)
-            avg_times(end+1) = mean(valid_times);
-            std_times(end+1) = std(valid_times);
-        else
-            avg_times(end+1) = 0;
-            std_times(end+1) = 0;
-        end
-    end
-    
-    bar(avg_times);
-    hold on;
-    errorbar(1:length(avg_times), avg_times, std_times, '.');
-    set(gca, 'XTickLabel', filter_names, 'XTick', 1:length(filter_names));
-    xtickangle(45);
-    title('执行时间对比 (秒)');
-    xlabel('滤波器');
-    ylabel('平均执行时间');
-    grid on;
-end
-
-if app.visualization.show_memory_usage && ~isempty(app.results.memory_usage)
-    subplot(rows, cols, subplot_idx);
-    subplot_idx = subplot_idx + 1;
-    
-    filter_names = {};
-    avg_memory = [];
-    std_memory = [];
-    
-    for i = 1:length(app.results.memory_usage)
-        result = app.results.memory_usage{i};
-        filter_names{end+1} = result.filter;
-        valid_memory = result.usage(~isnan(result.usage));
-        if ~isempty(valid_memory)
-            avg_memory(end+1) = mean(valid_memory);
-            std_memory(end+1) = std(valid_memory);
-        else
-            avg_memory(end+1) = 0;
-            std_memory(end+1) = 0;
-        end
-    end
-    
-    bar(avg_memory);
-    hold on;
-    errorbar(1:length(avg_memory), avg_memory, std_memory, '.');
-    set(gca, 'XTickLabel', filter_names, 'XTick', 1:length(filter_names));
-    xtickangle(45);
-    title('内存使用对比 (MB)');
-    xlabel('滤波器');
-    ylabel('平均内存使用');
-    grid on;
-end
-
-if app.visualization.show_tracking_accuracy && ~isempty(app.results.tracking_accuracy)
-    subplot(rows, cols, subplot_idx);
-    subplot_idx = subplot_idx + 1;
-    
-    filter_names = {};
-    avg_accuracy = [];
-    std_accuracy = [];
-    
-    for i = 1:length(app.results.tracking_accuracy)
-        result = app.results.tracking_accuracy{i};
-        filter_names{end+1} = result.filter;
-        valid_accuracy = result.accuracy(~isnan(result.accuracy));
-        if ~isempty(valid_accuracy)
-            avg_accuracy(end+1) = mean(valid_accuracy);
-            std_accuracy(end+1) = std(valid_accuracy);
-        else
-            avg_accuracy(end+1) = 0;
-            std_accuracy(end+1) = 0;
-        end
-    end
-    
-    bar(avg_accuracy);
-    hold on;
-    errorbar(1:length(avg_accuracy), avg_accuracy, std_accuracy, '.');
-    set(gca, 'XTickLabel', filter_names, 'XTick', 1:length(filter_names));
-    xtickangle(45);
-    title('跟踪精度对比');
-    xlabel('滤波器');
-    ylabel('平均精度');
-    ylim([0, 1]);
-    grid on;
-end
-
-if app.visualization.show_trajectories
-    subplot(rows, cols, subplot_idx);
-    subplot_idx = subplot_idx + 1;
-    
-    plot(0, 0);
-    title('轨迹对比');
-    xlabel('X');
-    ylabel('Y');
-    grid on;
-    legend('真值轨迹', '估计轨迹');
-end
-
-fprintf('可视化完成！\n');
-end
-
-%% 导出结果
-function export_results(app)
-if isempty(app.results.execution_times)
-    fprintf('请先运行对比测试！\n');
-    return;
-end
-
-fprintf('\n=== 导出结果 ===\n');
-
-fprintf('导出格式:\n');
-fprintf('1. CSV文件\n');
-fprintf('2. MAT文件\n');
-format_choice = input('请选择导出格式 (1-2): ');
-
-filename = sprintf('filter_comparison_%s', datestr(now, 'yyyyMMdd_HHmmss'));
-
-switch format_choice
-    case 1
-        csv_filename = [filename, '.csv'];
-        export_to_csv(app, csv_filename);
-    case 2
-        mat_filename = [filename, '.mat'];
-        export_to_mat(app, mat_filename);
-    otherwise
-        fprintf('无效选择！\n');
-        return;
-end
-
-fprintf('结果已导出到 %s\n', filename);
-end
-
-%% 导出到CSV文件
-function export_to_csv(app, filename)
-fid = fopen(filename, 'w');
-
-if fid == -1
-    fprintf('错误: 无法创建文件 %s\n', filename);
-    return;
-end
-
-fprintf(fid, '=== 执行时间 (秒) ===\n');
-fprintf(fid, '滤波器,平均值,标准差\n');
-for i = 1:length(app.results.execution_times)
-    result = app.results.execution_times{i};
-    if ~isfield(result, 'times') && ~isempty(result.times)
-        fprintf(fid, '%s,%.4f,%.4f\n', result.filter, mean(result.times), std(result.times));
-    else
-        fprintf(fid, '%s,N/A,N/A\n', result.filter);
-    end
-end
-
-fprintf(fid, '\n=== 内存使用 (MB) ===\n');
-fprintf(fid, '滤波器,平均值,标准差\n');
-for i = 1:length(app.results.memory_usage)
-    result = app.results.memory_usage{i};
-    valid_memory = result.usage(~isnan(result.usage));
-    if ~isempty(valid_memory)
-        fprintf(fid, '%s,%.4f,%.4f\n', result.filter, mean(valid_memory), std(valid_memory));
-    else
-        fprintf(fid, '%s,N/A,N/A\n', result.filter);
-    end
-end
-
-fprintf(fid, '\n=== 跟踪精度 ===\n');
-fprintf(fid, '滤波器,平均值,标准差\n');
-for i = 1:length(app.results.tracking_accuracy)
-    result = app.results.tracking_accuracy{i};
-    valid_accuracy = result.accuracy(~isnan(result.accuracy));
-    if ~isempty(valid_accuracy)
-        fprintf(fid, '%s,%.4f,%.4f\n', result.filter, mean(valid_accuracy), std(valid_accuracy));
-    else
-        fprintf(fid, '%s,N/A,N/A\n', result.filter);
-    end
-end
-
-fclose(fid);
-fprintf('CSV文件已成功导出到: %s\n', filename);
-end
-
-%% 导出到MAT文件
-function export_to_mat(app, filename)
-save(filename, 'app');
-fprintf('MAT文件已成功导出到: %s\n', filename);
-end
-
-%% 运行应用
-is_batch_mode = false;
-try
-    if ~isempty(getenv('MATLAB_BATCH')) || ~isempty(getenv('SLURM_JOB_ID')) || ~isempty(getenv('PBS_JOBID'))
-        is_batch_mode = true;
-    end
-    test_input = input('', 's');
-catch
-    is_batch_mode = true;
-end
-
-if ~is_batch_mode
-    main();
-else
-    fprintf('在批处理模式下运行默认对比测试...\n');
-    
-    app = init_app();
-    
-    filter_names = fieldnames(app.available_filters);
-    if ~isempty(filter_names)
-        first_filter = filter_names{1};
-        if isfield(app.available_filters.(first_filter), 'types') && ~isempty(app.available_filters.(first_filter).types)
-            app.params.selected_filters = {struct('group', first_filter, 'type', app.available_filters.(first_filter).types{1})};
-            
-            if length(filter_names) > 1
-                second_filter = filter_names{2};
-                if isfield(app.available_filters.(second_filter), 'types') && ~isempty(app.available_filters.(second_filter).types)
-                    app.params.selected_filters{end+1} = struct('group', second_filter, 'type', app.available_filters.(second_filter).types{1});
+            prev_states = target_states{t-1};
+            for i = 1:size(prev_states, 2)
+                % 目标存活
+                if rand() < params.survival_prob
+                    % 运动传播
+                    new_state = motion_model.F * prev_states(:, i) + sqrtm(motion_model.Q) * randn(4, 1);
+                    live_targets = [live_targets, new_state];
                 end
             end
         end
+        
+        % --- 目标新生 ---
+        for i = 1:length(birth_times)
+            if t == birth_times(i)
+                live_targets = [live_targets, initial_states(:,i)];
+            end
+        end
+        
+        % --- 目标死亡 (通过时间控制) ---
+        current_targets = [];
+        for i = 1:size(live_targets, 2)
+            is_dead = false;
+            for j = 1:length(birth_times)
+                if all(live_targets(:,i) == initial_states(:,j)) && t >= death_times(j)
+                    is_dead = true;
+                    break;
+                end
+            end
+            if ~is_dead
+                current_targets = [current_targets, live_targets(:,i)];
+            end
+        end
+        
+        target_states{t} = current_targets;
+
+        % --- 生成量测 ---
+        z = [];
+        if ~isempty(target_states{t})
+            for i = 1:size(target_states{t}, 2)
+                if rand() < params.detection_prob
+                    % 生成目标量测
+                    measurement = measurement_model.H * target_states{t}(:, i) + sqrtm(measurement_model.R) * randn(2, 1);
+                    z = [z, measurement];
+                end
+            end
+        end
+        
+        % --- 生成杂波 ---
+        num_clutter = poissrnd(params.clutter_rate);
+        clutter = [
+            rand(1, num_clutter) * (surveillance_area(1,2) - surveillance_area(1,1)) + surveillance_area(1,1);
+            rand(1, num_clutter) * (surveillance_area(2,2) - surveillance_area(2,1)) + surveillance_area(2,1)
+        ];
+        z = [z, clutter];
+        
+        measurements.measurements{t} = z;
     end
     
-    run_comparison(app);
-    
-    csv_filename = fullfile(pwd, 'filter_comparison_results.csv');
-    export_to_csv(app, csv_filename);
-    
-    fprintf('\n对比测试完成！\n');
+    ground_truth.states = target_states;
 end
+
+function empty_result = create_empty_result(name, duration)
+    % 创建一个空的结构体，用于在滤波器运行失败时填充
+    empty_result = struct( ...
+        'name', name, ...
+        'run_time', NaN, ...
+        'gospa_metrics', NaN(duration, 4), ...
+        'cardinality_error', NaN(duration, 1), ...
+        'estimated_cardinality', NaN(duration, 1) ...
+    );
+end
+
+function configs = build_filter_configs(enable)
+    % BUILD_FILTER_CONFIGS 根据激活选项构建滤波器配置列表
+    %
+    % 输入:
+    %   enable - 包含各滤波器激活状态的结构体
+    %
+    % 输出:
+    %   configs - 滤波器配置元胞数组
+
+    configs = {};
+
+    % PMBM家族
+    if isfield(enable, 'PMBM') && enable.PMBM
+        configs{end+1} = struct('name', 'PMBM', 'factory', 'pmbm.PMBMFactory', 'type', 'PMBM');
+    end
+    if isfield(enable, 'PMB') && enable.PMB
+        configs{end+1} = struct('name', 'PMB', 'factory', 'pmbm.PMBMFactory', 'type', 'PMB');
+    end
+
+    % TPMBM家族
+    if isfield(enable, 'TPMBM') && enable.TPMBM
+        configs{end+1} = struct('name', 'TPMBM', 'factory', 'tpmbm.TPMBMFactory', 'type', 'TPMBM');
+    end
+    if isfield(enable, 'TPMB') && enable.TPMB
+        configs{end+1} = struct('name', 'TPMB', 'factory', 'tpmbm.TPMBFactory', 'type', 'TPMB');
+    end
+
+    % PHD家族
+    if isfield(enable, 'GMPHD') && enable.GMPHD
+        configs{end+1} = struct('name', 'GMPHD', 'factory', 'phd.PHDFactory', 'type', 'GMPHD');
+    end
+    if isfield(enable, 'GMCPHD') && enable.GMCPHD
+        configs{end+1} = struct('name', 'GMCPHD', 'factory', 'phd.PHDFactory', 'type', 'GMCPHD');
+    end
+
+    % TPHD家族 (轨迹PHD)
+    if isfield(enable, 'GMTPHD') && enable.GMTPHD
+        configs{end+1} = struct('name', 'GMTPHD', 'factory', 'tphd.TPHDFactory', 'type', 'GMTPHD');
+    end
+
+    % 连续-离散滤波器家族
+    if isfield(enable, 'CDPMBM') && enable.CDPMBM
+        configs{end+1} = struct('name', 'CDPMBM', 'factory', 'cdfilters.CDFilterFactory', 'type', 'cd_pmbm');
+    end
+    if isfield(enable, 'CDGMPHD') && enable.CDGMPHD
+        configs{end+1} = struct('name', 'CDGMPHD', 'factory', 'cdfilters.CDFilterFactory', 'type', 'cd_gmphd');
+    end
+    if isfield(enable, 'CDGMCPHD') && enable.CDGMCPHD
+        configs{end+1} = struct('name', 'CDGMCPHD', 'factory', 'cdfilters.CDFilterFactory', 'type', 'cd_gmcphd');
+    end
+end
+
+% --- 脚本末尾 ---
+fprintf('\n仿真与分析全部完成。\n');
+fprintf('您可以调用 rerun_simulation() 函数以相同的参数重新运行此脚本。\n');

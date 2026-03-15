@@ -1,10 +1,7 @@
 function test_performance()
 % TEST_PERFORMANCE 性能测试函数
-% 
+%
 % 测试各算法的性能
-% 
-% 版本: 1.0
-% 日期: 2026-03-12
 
 fprintf('\n===== 开始性能测试 =====\n\n');
 

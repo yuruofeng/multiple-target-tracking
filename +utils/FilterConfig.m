@@ -9,9 +9,7 @@ classdef FilterConfig
     %   config.motionModel.F = kron(eye(2), [1 T; 0 1]);
     %   result = phd.GMPHD_filter(config, measurements);
     %
-    % 版本: 1.0
-    % 日期: 2026-03-12
-    
+
     properties
         % 运动模型
         motionModel struct = struct(...
@@ -58,6 +56,9 @@ classdef FilterConfig
         enableParallel (1,1) logical = false
         verbose (1,1) logical = false
         plotResults (1,1) logical = false
+        
+        % 额外参数（用于特定滤波器类型）
+        extraParams struct = struct()
     end
     
     properties (Dependent)
@@ -74,7 +75,9 @@ classdef FilterConfig
             
             % 解析键值对参数
             if mod(nargin, 2) ~= 0
-                error('MTT:InvalidInput', '参数必须为键值对');
+                ME = utils.MTTException(utils.ErrorCode.INVALID_INPUT, ...
+                    '参数必须为键值对');
+                throw(ME);
             end
             
             % 应用用户提供的参数
@@ -196,16 +199,34 @@ classdef FilterConfig
             fprintf('====================\n\n');
         end
         
-        function save(obj, filename)
-            % SAVE 保存配置到文件
-            
-            configStruct = obj.toStruct();
-            save(filename, '-struct', 'configStruct');
+        function birth = getBirthModel(obj, format)
+            % GETBIRTHMODEL 获取新生模型（支持多种格式）
+            %
+            % 输入:
+            %   format - 格式类型: 'array' (PMBM风格) 或 'single' (PMB风格)
+            %
+            % 输出:
+            %   birth - 新生模型结构
+
+            if strcmpi(format, 'single')
+                % 返回单值格式（用于PMB/TPMB）
+                if isfield(obj.birthModel, 'means')
+                    % 如果birthModel是数组格式，转换为单值格式
+                    birth.mean = obj.birthModel.means(:, 1);
+                    birth.cov = obj.birthModel.covs(:, :, 1);
+                    birth.existProb = obj.birthModel.weights(1) * obj.birthModel.intensity;
+                else
+                    birth = obj.birthModel;
+                end
+            else
+                % 返回数组格式（用于PMBM/TPMBM）
+                birth = obj.birthModel;
+            end
         end
-        
+
         function s = toStruct(obj)
             % TOSTRUCT 转换为结构体
-            
+
             props = properties(obj);
             s = struct();
             for i = 1:length(props)

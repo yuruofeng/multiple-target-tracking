@@ -8,13 +8,10 @@ function test_cd_filters_integration()
     %   4. 计算性能指标
     %
     % 参考文献:
-    %   A. F. Garcia-Fernandez, S. Maskell, "Continuous-discrete multiple target 
-    %   filtering: PMBM, PHD and CPHD filter implementations," 
+    %   A. F. Garcia-Fernandez, S. Maskell, "Continuous-discrete multiple target
+    %   filtering: PMBM, PHD and CPHD filter implementations,"
     %   IEEE Transactions on Signal Processing, vol. 68, pp. 1300-1314, 2020.
-    %
-    % 版本: 2.0 (重构版)
-    % 日期: 2026-03-12
-    
+
     fprintf('\n========================================\n');
     fprintf('连续-离散滤波器集成测试\n');
     fprintf('========================================\n\n');

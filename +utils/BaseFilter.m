@@ -18,9 +18,7 @@ classdef (Abstract) BaseFilter
     %       end
     %   end
     %
-    % 版本: 1.0
-    % 日期: 2026-03-12
-    
+
     properties (Access = protected)
         Config           % FilterConfig对象
         State            % 滤波器状态
@@ -67,14 +65,19 @@ classdef (Abstract) BaseFilter
             %
             % 输出:
             %   result - FilterResult对象
-            
+
+            % 处理可选参数
+            if nargin < 3
+                groundTruth = [];
+            end
+
             % 初始化结果对象
             result = utils.FilterResult();
             result.algorithmName = class(obj);
-            
+
             % 记录开始时间
             startTime = tic;
-            
+
             try
                 % 1. 验证输入
                 obj = obj.validateInputs(measurements, groundTruth);
@@ -108,7 +111,11 @@ classdef (Abstract) BaseFilter
                 end
                 
                 % 4. 组织结果
-                result.estimates = obj.organizeEstimates(estimates);
+                organized = obj.organizeEstimates(estimates);
+                result.estimates.estimatesList = organized.estimatesList;
+                result.estimates.weights = organized.weights;
+                result.estimates.cardinality = organized.cardinality;
+                result.estimates.trajectories = organized.trajectories;
                 result.filterState = obj.State;
                 
                 % 5. 计算性能度量（如果有真实数据）
@@ -134,9 +141,19 @@ classdef (Abstract) BaseFilter
                     result.errorCode = utils.ErrorCode.GENERAL_ERROR;
                 end
                 result.message = ME.message;
-                
+
+                % 记录错误堆栈到诊断信息
+                result.diagnostics.errorStack = ME.stack;
+                result.diagnostics.errorIdentifier = ME.identifier;
+
                 if obj.Config.verbose
                     fprintf('滤波器执行失败: %s\n', ME.message);
+                    fprintf('错误标识符: %s\n', ME.identifier);
+                    fprintf('错误堆栈:\n');
+                    for stack_i = 1:length(ME.stack)
+                        fprintf('  [%d] %s (文件: %s, 行: %d)\n', ...
+                            stack_i, ME.stack(stack_i).name, ME.stack(stack_i).file, ME.stack(stack_i).line);
+                    end
                 end
             end
             
@@ -166,19 +183,24 @@ classdef (Abstract) BaseFilter
             
             % 验证量测数据
             if ~isstruct(measurements)
-                error('MTT:InvalidInput', 'measurements必须是结构体');
+                ME = utils.MTTException(utils.ErrorCode.INVALID_INPUT, ...
+                    'measurements必须是结构体');
+                throw(ME);
             end
-            
+
             if ~isfield(measurements, 'timeStamps') || ...
                ~isfield(measurements, 'measurements')
-                error('MTT:InvalidInput', ...
+                ME = utils.MTTException(utils.ErrorCode.INVALID_INPUT, ...
                     'measurements必须包含timeStamps和measurements字段');
+                throw(ME);
             end
-            
+
             % 验证真实数据（如果提供）
             if nargin > 2 && ~isempty(groundTruth)
                 if ~isstruct(groundTruth)
-                    error('MTT:InvalidInput', 'groundTruth必须是结构体');
+                    ME = utils.MTTException(utils.ErrorCode.INVALID_INPUT, ...
+                        'groundTruth必须是结构体');
+                    throw(ME);
                 end
             end
         end
@@ -195,8 +217,25 @@ classdef (Abstract) BaseFilter
         
         function estimates = organizeEstimates(obj, estimates)
             % ORGANIZEESTIMATES 组织估计结果
-            
-            estimates = struct('states', estimates);
+
+            % Extract states and cardinalities from estimates cell array
+            numSteps = numel(estimates);
+            cardinalities = zeros(1, numSteps);
+
+            for k = 1:numSteps
+                if isfield(estimates{k}, 'cardinality')
+                    cardinalities(k) = estimates{k}.cardinality;
+                end
+            end
+
+            % Create struct with all required fields
+            result_struct = struct();
+            result_struct.estimatesList = estimates;
+            result_struct.weights = [];  % Can be populated by specific filters if needed
+            result_struct.cardinality = cardinalities;
+            result_struct.trajectories = {};  % Can be populated by trajectory filters
+
+            estimates = result_struct;
         end
         
         function metrics = computeMetrics(obj, estimates, groundTruth)

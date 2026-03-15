@@ -13,9 +13,7 @@ classdef GMCPHD < utils.BaseFilter
     %   cphdFilter = phd.GMCPHD(config);
     %   result = cphdFilter.run(measurements, groundTruth);
     %
-    % 版本: 2.0 (重构版)
-    % 日期: 2026-03-12
-    
+
     properties (Access = private)
         GaussianComponents  % 高斯分量存储
         Cardinality         % 基数分布

@@ -9,9 +9,7 @@ classdef TrajectoryMetric < handle
     %       X_estimate, t_b_estimate, length_estimate, ...
     %       X_truth, t_birth, t_death, k_end, Nx);
     %
-    % 版本: 2.0 (重构版)
-    % 日期: 2026-03-12
-    
+
     properties
         p       (1,1) double = 2      % 指数
         c       (1,1) double = 10     % 截断距离

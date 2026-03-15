@@ -12,9 +12,7 @@ classdef Munkres
     %   munkres = assignment.Munkres();
     %   [assignment, cost] = munkres.solve(costMatrix);
     %
-    % 版本: 2.0 (重构版)
-    % 日期: 2026-03-12
-    
+
     properties (Access = public)
         Results = struct()  % 算法结果
     end

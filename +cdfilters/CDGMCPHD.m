@@ -13,9 +13,7 @@ classdef CDGMCPHD < utils.BaseFilter
     %   filter = cdfilters.CDGMCPHD(config);
     %   result = filter.run(measurements, groundTruth);
     %
-    % 版本: 1.0 (重构版)
-    % 日期: 2026-03-12
-    
+
     properties (Access = private)
         GaussianComponents       % 高斯分量
         Cardinality              % 基数分布

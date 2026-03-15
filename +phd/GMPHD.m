@@ -13,9 +13,7 @@ classdef GMPHD < utils.BaseFilter
     %   phdFilter = phd.GMPHD(config);
     %   result = phdFilter.run(measurements, groundTruth);
     %
-    % 版本: 2.0 (重构版)
-    % 日期: 2026-03-12
-    
+
     properties (Access = private)
         GaussianComponents  % 高斯分量存储
     end

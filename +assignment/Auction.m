@@ -11,9 +11,7 @@ classdef Auction
     %   auction = assignment.Auction();
     %   [personToObj, objToPerson, cost] = auction.solve(costMatrix);
     %
-    % 版本: 2.0 (重构版)
-    % 日期: 2026-03-12
-    
+
     properties (Access = private)
         MaxIterations  = 1000  % 最大迭代次数
         Epsilon        = 0     % 出价步长

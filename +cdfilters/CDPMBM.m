@@ -13,9 +13,7 @@ classdef CDPMBM < utils.BaseFilter
     %   filter = cdfilters.CDPMBM(config);
     %   result = filter.run(measurements, groundTruth);
     %
-    % 版本: 1.0 (重构版)
-    % 日期: 2026-03-12
-    
+
     properties (Access = private)
         PoissonComponent         % 泊松分量
         MBMComponent             % 多伯努利混合分量

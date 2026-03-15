@@ -8,9 +8,7 @@ classdef AssignmentFactory
     %   algorithm = factory.createAlgorithm('Murty', 10);  % 前10个最佳分配
     %   [assignments, costs] = algorithm.solve(costMatrix);
     %
-    % 版本: 1.0
-    % 日期: 2026-03-12
-    
+
     properties (Constant)
         % 支持的算法类型
         AlgorithmTypes = struct(...

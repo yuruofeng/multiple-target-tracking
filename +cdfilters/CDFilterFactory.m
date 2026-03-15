@@ -12,10 +12,7 @@ classdef CDFilterFactory
     %   config = utils.FilterConfig('detectionProb', 0.9);
     %   filter = cdfilters.CDFilterFactory.create('cd_gmphd', config);
     %
-    % 版本: 1.0 (集成版)
-    % 日期: 2026-03-12
-    % 来源: CD MTT filters 目录
-    
+
     methods (Static)
         function filter = create(filterType, config)
             % CREATE 创建滤波器实例

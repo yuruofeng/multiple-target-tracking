@@ -3,9 +3,7 @@ classdef ErrorCode
     %
     % 定义多目标跟踪工具箱中使用的所有错误码
     %
-    % 版本: 1.0
-    % 日期: 2026-03-12
-    
+
     properties (Constant)
         % 成功
         SUCCESS                 = 0

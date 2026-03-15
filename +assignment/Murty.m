@@ -11,9 +11,7 @@ classdef Murty < handle
     %   murty = assignment.Murty(3);
     %   [assignments, costs] = murty.solve(costMatrix);
     %
-    % 版本: 2.0 (重构版)
-    % 日期: 2026-03-12
-    
+
     properties
         NumBest      (1,1) double = 1  % 要查找的k个最佳分配
         Assignments   (:,:) double = []  % k-best分配
